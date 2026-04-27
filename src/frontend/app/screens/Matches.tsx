@@ -1,0 +1,103 @@
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
+import { Search, X, Eye } from 'lucide-react';
+import { Badge } from '../components/Badge';
+import { Button } from '../components/Button';
+import { Card, CardBody } from '../components/Card';
+import { LoadingSpinner } from '../components/LoadingSpinner';
+import { Table, Column } from '../components/Table';
+import { MatchRecord, getMatches } from '../api/client';
+
+const emptyFilters = { id: '', bot: '', status: '', result: '', rules: '' };
+
+export function Matches() {
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const [filters, setFilters] = useState({ ...emptyFilters, bot: params.get('bot') || '' });
+  const [matches, setMatches] = useState<MatchRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const loadMatches = () => {
+    setLoading(true);
+    setError('');
+    getMatches(filters)
+      .then(setMatches)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadMatches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const clearFilters = () => {
+    setFilters(emptyFilters);
+    setLoading(true);
+    getMatches({})
+      .then(setMatches)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .finally(() => setLoading(false));
+  };
+
+  const columns: Column<MatchRecord>[] = [
+    { key: 'id', label: 'ID', sortable: true },
+    {
+      key: 'bots',
+      label: 'Боты',
+      render: (match) => <div className="font-medium text-gray-900">{match.botAName} vs {match.botBName}</div>,
+    },
+    { key: 'rules', label: 'Правила', sortable: true },
+    {
+      key: 'status',
+      label: 'Статус',
+      sortable: true,
+      render: (match) => <Badge variant={match.status === 'Finished' ? 'success' : match.status === 'Failed' ? 'error' : 'info'}>{match.status}</Badge>,
+    },
+    { key: 'result', label: 'Результат', sortable: true },
+    { key: 'started', label: 'Время', sortable: true },
+    { key: 'movesCount', label: 'Ходы', sortable: true },
+    {
+      key: 'actions',
+      label: 'Действия',
+      render: (match) => (
+        <button type="button" onClick={(e) => { e.stopPropagation(); navigate(`/matches/${match.id}`); }} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg">
+          <Eye className="w-4 h-4" />
+        </button>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold text-gray-900">Матчи</h1>
+        <p className="text-gray-600 mt-1">Карточки запусков, результаты и история статусов</p>
+      </div>
+
+      <Card className="mb-6">
+        <CardBody>
+          <div className="flex items-center gap-2 mb-4">
+            <Search className="w-5 h-5 text-gray-400" />
+            <h2 className="text-lg font-semibold text-gray-900">Фильтры матчей</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
+            <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="ID матча" value={filters.id} onChange={(e) => setFilters({ ...filters, id: e.target.value })} />
+            <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="ID/название бота" value={filters.bot} onChange={(e) => setFilters({ ...filters, bot: e.target.value })} />
+            <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Статус" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} />
+            <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Результат" value={filters.result} onChange={(e) => setFilters({ ...filters, result: e.target.value })} />
+            <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Правила" value={filters.rules} onChange={(e) => setFilters({ ...filters, rules: e.target.value })} />
+            <div className="flex gap-2">
+              <Button variant="primary" onClick={loadMatches} className="flex-1">Применить</Button>
+              <Button variant="secondary" onClick={clearFilters}><X className="w-4 h-4" /></Button>
+            </div>
+          </div>
+        </CardBody>
+      </Card>
+
+      {error && <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
+      {loading ? <LoadingSpinner /> : <Table columns={columns} data={matches} emptyMessage="Матчи по заданным фильтрам не найдены" onRowClick={(row) => navigate(`/matches/${row.id}`)} />}
+    </div>
+  );
+}

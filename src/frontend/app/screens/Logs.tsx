@@ -6,7 +6,7 @@ import { Button } from '../components/Button';
 import { Card, CardBody } from '../components/Card';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { Table, Column } from '../components/Table';
-import { LogRecord, getLogs } from '../api/client';
+import { LogRecord, downloadLogSource, getLogs } from '../api/client';
 
 const emptyFilters = { id: '', type: '', level: '', match_id: '', query: '', date_from: '', date_to: '' };
 
@@ -63,9 +63,20 @@ export function Logs() {
           <Link to={`/logs/${log.id}`} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Открыть лог">
             <Eye className="w-4 h-4" />
           </Link>
-          <a href={`/api/logs/${log.id}/download`} className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg" title="Скачать лог">
+          <button
+            type="button"
+            className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+            title="Скачать лог"
+            onClick={async () => {
+              try {
+                await downloadLogSource(log.id, `${log.id}.log`);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Не удалось скачать лог');
+              }
+            }}
+          >
             <Download className="w-4 h-4" />
-          </a>
+          </button>
         </div>
       ),
     },

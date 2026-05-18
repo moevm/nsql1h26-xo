@@ -2,14 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from fastapi.responses import PlainTextResponse
 
-from app.api.dependencies import current_user
+from app.api.dependencies import current_user, require_moderator_or_admin
 from app.core.utils import contains
+from app.db.connection import get_db
 from app.services.logs import get_log_by_id, grouped_logs
 
 router = APIRouter(prefix="/logs", tags=["logs"])
+
+
+class LogUpdateRequest(BaseModel):
+    content: str | None = None
+    note: str | None = None
+
 
 
 @router.get("")
@@ -21,7 +29,7 @@ def logs(
     query: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    _: dict[str, Any] = Depends(current_user),
+    _: dict[str, Any] = Depends(require_moderator_or_admin),
 ) -> list[dict[str, Any]]:
     result = []
 
@@ -56,7 +64,19 @@ def log_detail(log_id: str, _: dict[str, Any] = Depends(current_user)) -> dict[s
     return get_log_by_id(log_id)
 
 
+@router.put("/{log_id}")
+def update_log(log_id: str, payload: LogUpdateRequest, _: dict[str, Any] = Depends(require_moderator_or_admin)) -> dict[str, Any]:
+    db = get_db()
+    current = get_log_by_id(log_id)
+    update = {key: value for key, value in payload.model_dump().items() if value is not None}
+    if not update:
+        return current
+    update["id"] = log_id
+    db.log_notes.update_one({"id": log_id}, {"$set": update}, upsert=True)
+    return get_log_by_id(log_id)
+
+
 @router.get("/{log_id}/download", response_class=PlainTextResponse)
-def log_download(log_id: str) -> str:
+def log_download(log_id: str, _: dict[str, Any] = Depends(current_user)) -> str:
     log = get_log_by_id(log_id)
     return log.get("content", "")

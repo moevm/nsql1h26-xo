@@ -3,6 +3,25 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.utils import fmt
+
+
+def describe_rules(match: dict[str, Any]) -> str:
+    board = match.get("board") if isinstance(match.get("board"), dict) else {}
+    width = int(board.get("width") or board.get("size") or match.get("board_size") or 15)
+    height = int(board.get("height") or width)
+    win_condition = board.get("win_condition") or board.get("winCondition") or match.get("win_condition")
+
+    if not win_condition:
+        raw_rules = str(match.get("rules") or "")
+        if raw_rules.startswith("infinite-ttt-"):
+            win_condition = raw_rules.removeprefix("infinite-ttt-")
+
+    try:
+        win_condition = int(win_condition or 5)
+    except (TypeError, ValueError):
+        win_condition = 5
+
+    return f"Поле {width}×{height}; победа: {win_condition} в ряд"
 from app.db.connection import get_db
 
 
@@ -19,7 +38,7 @@ def match_to_api(match: dict[str, Any], with_events: bool = False) -> dict[str, 
         "botAName": bot_a.get("name", match.get("bot_a_id", "")),
         "botBId": match.get("bot_b_id", ""),
         "botBName": bot_b.get("name", match.get("bot_b_id", "")),
-        "rules": match.get("rules", "infinite-ttt"),
+        "rules": describe_rules(match),
         "status": match.get("status", "Queued"),
         "result": match.get("result", "-"),
         "winnerBotId": match.get("winner_bot_id"),
@@ -31,6 +50,8 @@ def match_to_api(match: dict[str, Any], with_events: bool = False) -> dict[str, 
         "logCount": match.get("log_count", 0),
         "statusHistory": match.get("status_history", []),
         "board": match.get("board", {}),
+        "winCondition": int((match.get("board") or {}).get("win_condition") or match.get("win_condition") or 5),
+        "comment": match.get("comment", ""),
     }
 
     if with_events:

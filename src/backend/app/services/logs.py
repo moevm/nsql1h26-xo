@@ -18,6 +18,9 @@ def make_log_record(match_id: str, events: list[dict[str, Any]]) -> dict[str, An
         for e in events
     )
 
+    db = get_db()
+    note = db.log_notes.find_one({"id": f"LOG-{match_id}"}, {"_id": 0}) or {}
+
     return {
         "id": f"LOG-{match_id}",
         "type": "match" if match_id != "system" else "system",
@@ -28,7 +31,8 @@ def make_log_record(match_id: str, events: list[dict[str, Any]]) -> dict[str, An
         "rawStart": first.get("ts"),
         "rawEnd": last.get("ts"),
         "size": f"{max(1, len(content.encode('utf-8')) // 1024)} KB",
-        "content": content,
+        "content": note.get("content", content),
+        "note": note.get("note", ""),
     }
 
 

@@ -5,13 +5,27 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
-from app.api.dependencies import current_user
+from app.api.dependencies import current_user, require_moderator_or_admin
 from app.core.utils import contains, now_iso
+from app.core.upload_limits import MAX_BOT_UPLOAD_BYTES, read_upload_limited
 from app.db.connection import get_db
 from app.services.bots import bot_to_api, build_bot_download_response
 
 router = APIRouter(prefix="/bots", tags=["bots"])
+
+
+class BotUpdateRequest(BaseModel):
+    name: str | None = None
+    language: str | None = None
+    version: str | None = None
+    tags: list[str] | None = None
+    visibility: str | None = None
+    status: str | None = None
+    description: str | None = None
+    comment: str | None = None
+    runSettings: dict[str, Any] | None = Field(default=None, alias="runSettings")
 
 
 @router.get("")
@@ -59,18 +73,19 @@ async def create_bot(
     description: str = Form(""),
     comment: str = Form(""),
     file: UploadFile = File(...),
-    user: dict[str, Any] = Depends(current_user),
+    user: dict[str, Any] = Depends(require_moderator_or_admin),
 ) -> dict[str, Any]:
     db = get_db()
-    allowed = (".zip", ".py", ".tar.gz")
+    if language.strip().lower() != "python":
+        raise HTTPException(status_code=400, detail="Сейчас поддерживаются только Python-боты")
 
-    if not file.filename or not file.filename.lower().endswith(allowed):
+    if not file.filename or not file.filename.lower().endswith(".py"):
         raise HTTPException(
             status_code=400,
-            detail="Неподдерживаемый формат файла. Используйте .zip, .py или .tar.gz",
+            detail="Неподдерживаемый формат файла. Используйте Python-файл .py",
         )
 
-    content = await file.read()
+    content = await read_upload_limited(file, max_bytes=MAX_BOT_UPLOAD_BYTES, label="Файл бота")
 
     if not content:
         raise HTTPException(status_code=400, detail="Файл пустой или повреждён")
@@ -85,7 +100,7 @@ async def create_bot(
         "owner_login": user["email"].split("@")[0],
         "uploaded_by": user["name"],
         "name": name,
-        "language": language,
+        "language": "Python",
         "version": version,
         "visibility": visibility,
         "status": "active",
@@ -98,6 +113,7 @@ async def create_bot(
         "comment": comment,
         "file_name": file.filename,
         "size_bytes": len(content),
+        "run_settings": {"max_moves": 225, "move_timeout_ms": 1000},
     }
 
     db.bots.insert_one(bot)
@@ -138,6 +154,37 @@ def bot_detail(bot_id: str, _: dict[str, Any] = Depends(current_user)) -> dict[s
     return bot_to_api(bot)
 
 
+@router.put("/{bot_id}")
+def update_bot(bot_id: str, payload: BotUpdateRequest, _: dict[str, Any] = Depends(require_moderator_or_admin)) -> dict[str, Any]:
+    db = get_db()
+    bot = db.bots.find_one({"id": bot_id}, {"_id": 0})
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Бот не найден")
+
+    raw = payload.model_dump(by_alias=True)
+    update = {}
+    for key, value in raw.items():
+        if value is None:
+            continue
+        if key == "language":
+            if str(value).strip().lower() != "python":
+                raise HTTPException(status_code=400, detail="Сейчас поддерживаются только Python-боты")
+            update["language"] = "Python"
+        elif key == "runSettings":
+            max_moves = max(1, min(1000, int(value.get("maxMoves") or value.get("max_moves") or 225)))
+            timeout = max(100, min(30000, int(value.get("moveTimeoutMs") or value.get("move_timeout_ms") or 1000)))
+            update["run_settings"] = {"max_moves": max_moves, "move_timeout_ms": timeout}
+        else:
+            update[key] = value
+    if update:
+        update["updated_at"] = now_iso()
+        db.bots.update_one({"id": bot_id}, {"$set": update})
+
+    updated = db.bots.find_one({"id": bot_id}, {"_id": 0})
+    return bot_to_api(updated)
+
+
 @router.get("/{bot_id}/download")
-def bot_download(bot_id: str) -> Response:
+def bot_download(bot_id: str, _: dict[str, Any] = Depends(current_user)) -> Response:
     return build_bot_download_response(bot_id)

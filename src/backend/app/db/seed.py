@@ -1,164 +1,190 @@
 from __future__ import annotations
 
 from app.core.utils import now_iso
-from app.db.connection import get_db
+from app.db.connection import get_db, wait_for_database
+
+
+def _iso(day: int, hour: int = 12, minute: int = 0) -> str:
+    return f"2026-03-{day:02d}T{hour:02d}:{minute:02d}:00+00:00"
 
 
 def seed_database() -> None:
+    """Наполняет пустую MongoDB демонстрационными данными при старте приложения."""
+    wait_for_database()
     db = get_db()
 
-    if db.users.count_documents({}) > 0:
+    # Если основные данные уже есть, не перезатираем состояние пользователя.
+    if db.bots.count_documents({}) > 0:
         return
-
+    
     db.users.insert_many([
-        {"id": "U-001", "name": "Debug Admin", "email": "admin@arena.local", "password": "admin123", "role": "admin"},
-        {"id": "U-002", "name": "Debug Moderator", "email": "moderator@arena.local", "password": "moderator123", "role": "moderator"},
-        {"id": "U-003", "name": "Debug User", "email": "user@arena.local", "password": "user123", "role": "user"},
+        {"id": "U-001", "name": "Debug Admin", "email": "admin@arena.local", "password": "admin123", "role": "admin", "created_at": _iso(1)},
+        {"id": "U-002", "name": "Debug Moderator", "email": "moderator@arena.local", "password": "moderator123", "role": "moderator", "created_at": _iso(1, 13)},
+        {"id": "U-003", "name": "Debug User", "email": "user@arena.local", "password": "user123", "role": "user", "created_at": _iso(1, 14)},
+        {"id": "U-004", "name": "Иван Петров", "email": "student01@arena.local", "password": "student123", "role": "user", "created_at": _iso(2)},
+        {"id": "U-005", "name": "Мария Сидорова", "email": "student02@arena.local", "password": "student123", "role": "user", "created_at": _iso(2, 13)},
+        {"id": "U-006", "name": "Алексей Иванов", "email": "student03@arena.local", "password": "student123", "role": "user", "created_at": _iso(2, 14)},
+        {"id": "U-007", "name": "Ольга Ким", "email": "student04@arena.local", "password": "student123", "role": "user", "created_at": _iso(3)},
+        {"id": "U-008", "name": "Никита Волков", "email": "student05@arena.local", "password": "student123", "role": "user", "created_at": _iso(3, 13)},
     ])
 
-    bots = [
-        {
-            "id": "B-001", "owner_login": "student01", "uploaded_by": "Иван Петров", "name": "DiagonalHunter",
-            "language": "Python", "version": "2.1.0", "visibility": "public", "status": "active",
-            "created_at": "2026-03-01T12:00:00+00:00", "updated_at": "2026-03-20T15:00:00+00:00",
-            "active_version_id": "V-001", "tags": ["aggressive", "baseline"], "hash": "a7f3d9e2",
-            "description": "Агрессивная стратегия для быстрого построения диагональных линий.", "comment": "Основной тестовый бот.",
-            "file_name": "diagonal_hunter.zip", "size_bytes": 1024,
-        },
-        {
-            "id": "B-002", "owner_login": "student02", "uploaded_by": "Мария Сидорова", "name": "DefenderZero",
-            "language": "Python", "version": "1.8.3", "visibility": "public", "status": "active",
-            "created_at": "2026-03-02T10:00:00+00:00", "updated_at": "2026-03-20T15:02:00+00:00",
-            "active_version_id": "V-002", "tags": ["defense", "heuristic"], "hash": "b4c6e1a8",
-            "description": "Защитная эвристика, блокирует потенциальные линии соперника.", "comment": "Версия для сравнения.",
-            "file_name": "defender_zero.zip", "size_bytes": 1536,
-        },
-        {
-            "id": "B-003", "owner_login": "student03", "uploaded_by": "Алексей Иванов", "name": "RandomWalker",
-            "language": "JavaScript", "version": "1.0.1", "visibility": "public", "status": "archived",
-            "created_at": "2026-02-18T09:00:00+00:00", "updated_at": "2026-03-10T08:00:00+00:00",
-            "active_version_id": "V-003", "tags": ["random", "baseline"], "hash": "c8d2f5b3",
-            "description": "Простая случайная стратегия для базового сравнения.", "comment": "Архивная версия.",
-            "file_name": "random_walker.js", "size_bytes": 768,
-        },
+    bot_templates = [
+        ("DiagonalHunter", "Python", "2.1.0", "active", ["aggressive", "baseline"], "Агрессивная стратегия для построения диагоналей."),
+        ("DefenderZero", "Python", "1.8.3", "active", ["defense", "heuristic"], "Защитная эвристика, блокирует линии соперника."),
+        ("RandomWalker", "Python", "1.0.1", "archived", ["random", "baseline"], "Случайная стратегия для базового сравнения."),
+        ("CenterControl", "Python", "3.0.0", "active", ["center", "stable"], "Контролирует центральную область поля."),
+        ("ForkMaster", "Python", "0.9.4", "active", ["fork", "fast"], "Ищет вилки и двойные угрозы."),
+        ("LineBreaker", "Python", "1.2.0", "active", ["defense", "counter"], "Разрывает линии соперника контрходами."),
+        ("SilentBot", "Python", "0.7.2", "disabled", ["sandbox", "slow"], "Тестовый бот с повышенным временем ответа."),
+        ("EdgeRunner", "Python", "2.4.1", "active", ["edge", "experimental"], "Играет от краёв и расширяет поле."),
     ]
+
+    bots = []
+    versions = []
+    stats = []
+    for i, (name, language, version, status, tags, description) in enumerate(bot_templates, start=1):
+        bot_id = f"B-{i:03d}"
+        version_id = f"V-{i:03d}"
+        created = _iso(min(i + 2, 20), 10 + i % 8, 0)
+        wins = [5, 4, 1, 6, 7, 3, 0, 4][i - 1]
+        draws = [1, 1, 0, 2, 0, 1, 0, 2][i - 1]
+        losses = [2, 3, 3, 1, 1, 4, 2, 2][i - 1]
+        total = wins + draws + losses
+        bots.append({
+            "id": bot_id,
+            "owner_login": f"student{i:02d}",
+            "uploaded_by": ["Иван Петров", "Мария Сидорова", "Алексей Иванов", "Ольга Ким", "Никита Волков", "Елена Морозова", "Павел Орлов", "Анна Кузнецова"][i - 1],
+            "name": name,
+            "language": language,
+            "version": version,
+            "visibility": "public" if i != 7 else "private",
+            "status": status,
+            "created_at": created,
+            "updated_at": _iso(20 - i % 5, 15, i),
+            "active_version_id": version_id,
+            "tags": tags,
+            "hash": (hex(0xA7F3D9E2 + i)[2:])[:8],
+            "description": description,
+            "comment": "Демонстрационная запись для проверки сценариев.",
+            "file_name": f"{name.lower()}_{version.replace('.', '_')}.py",
+            "size_bytes": 900 + i * 173,
+            "run_settings": {"max_moves": 225, "move_timeout_ms": 1000},
+        })
+        versions.append({
+            "id": version_id,
+            "bot_id": bot_id,
+            "version_no": max(1, i % 5 + 1),
+            "sha256": chr(96 + i) * 64,
+            "size_bytes": 900 + i * 173,
+            "entrypoint": "main.py",
+            "source_blob": b"import json, sys\nstate=json.load(sys.stdin)\nused={(m.get('payload',m).get('x'),m.get('payload',m).get('y')) for m in state.get('moves',[])}\nb=state.get('board',{})\nfor y in range(int(b.get('minY',-9)), int(b.get('maxY',9))+1):\n    for x in range(int(b.get('minX',-9)), int(b.get('maxX',9))+1):\n        if (x,y) not in used:\n            print(json.dumps({'x':x,'y':y}))\n            raise SystemExit\nprint(json.dumps({'x':0,'y':0}))\n",
+            "created_at": created,
+        })
+        stats.append({
+            "bot_id": bot_id,
+            "updated_at": now_iso(),
+            "elo": [1240, 1195, 980, 1310, 1380, 1105, 870, 1160][i - 1],
+            "total_matches": total,
+            "wins": wins,
+            "draws": draws,
+            "losses": losses,
+            "avg_moves": [170, 190, 120, 160, 145, 210, 80, 175][i - 1],
+            "avg_duration_ms": [18000, 21000, 9000, 16000, 14000, 25000, 52000, 17000][i - 1],
+            "last_100_winrate": round(wins / max(total, 1), 2),
+        })
+
     db.bots.insert_many(bots)
+    db.bot_versions.insert_many(versions)
+    db.bot_stats.insert_many(stats)
 
-    db.bot_versions.insert_many([
-        {"id": "V-001", "bot_id": "B-001", "version_no": 4, "sha256": "a" * 64, "size_bytes": 1024, "entrypoint": "main.py", "source_blob": b"demo", "created_at": "2026-03-20T15:00:00+00:00"},
-        {"id": "V-002", "bot_id": "B-002", "version_no": 2, "sha256": "b" * 64, "size_bytes": 1536, "entrypoint": "main.py", "source_blob": b"demo", "created_at": "2026-03-20T15:02:00+00:00"},
-        {"id": "V-003", "bot_id": "B-003", "version_no": 1, "sha256": "c" * 64, "size_bytes": 768, "entrypoint": "index.js", "source_blob": b"demo", "created_at": "2026-03-10T08:00:00+00:00"},
-    ])
-
-    db.bot_stats.insert_many([
-        {"bot_id": "B-001", "updated_at": now_iso(), "elo": 1240, "total_matches": 8, "wins": 5, "draws": 1, "losses": 2, "avg_moves": 170, "avg_duration_ms": 18000, "last_100_winrate": 0.62},
-        {"bot_id": "B-002", "updated_at": now_iso(), "elo": 1195, "total_matches": 8, "wins": 4, "draws": 1, "losses": 3, "avg_moves": 190, "avg_duration_ms": 21000, "last_100_winrate": 0.50},
-        {"bot_id": "B-003", "updated_at": now_iso(), "elo": 980, "total_matches": 4, "wins": 1, "draws": 0, "losses": 3, "avg_moves": 120, "avg_duration_ms": 9000, "last_100_winrate": 0.25},
-    ])
-
-    matches = [
-        {
-            "id": "M-2847", "bot_a_id": "B-001", "bot_b_id": "B-002", "rules": "infinite-ttt-5",
-            "started_at": "2026-03-20T15:00:00+00:00", "finished_at": "2026-03-20T15:00:19+00:00",
-            "status": "Finished", "result": "B-001 win", "winner_bot_id": "B-001", "moves_count": 18, "log_count": 5,
-            "duration_ms": 19000, "board": {"width": 19, "height": 19, "min_x": -5, "max_x": 13, "min_y": -8, "max_y": 10},
-            "status_history": [
-                {"status": "Queued", "time": "20.03.2026 15:00"},
-                {"status": "Running", "time": "20.03.2026 15:00"},
-                {"status": "Finished", "time": "20.03.2026 15:00"},
-            ],
-        },
-        {
-            "id": "M-2846", "bot_a_id": "B-002", "bot_b_id": "B-003", "rules": "infinite-ttt-5",
-            "started_at": "2026-03-19T12:30:00+00:00", "finished_at": "2026-03-19T12:30:11+00:00",
-            "status": "Finished", "result": "B-002 win", "winner_bot_id": "B-002", "moves_count": 12, "log_count": 4,
-            "duration_ms": 11000, "board": {"width": 15, "height": 15, "min_x": -4, "max_x": 10, "min_y": -7, "max_y": 7},
-            "status_history": [
-                {"status": "Queued", "time": "19.03.2026 12:30"},
-                {"status": "Running", "time": "19.03.2026 12:30"},
-                {"status": "Finished", "time": "19.03.2026 12:30"},
-            ],
-        },
-        {
-            "id": "M-2845", "bot_a_id": "B-003", "bot_b_id": "B-001", "rules": "infinite-ttt-5",
-            "started_at": "2026-03-18T18:05:00+00:00", "finished_at": "2026-03-18T18:05:04+00:00",
-            "status": "Failed", "result": "runtime error", "winner_bot_id": None, "moves_count": 4, "log_count": 3,
-            "duration_ms": 4000, "board": {"width": 9, "height": 9, "min_x": -4, "max_x": 4, "min_y": -4, "max_y": 4},
-            "status_history": [
-                {"status": "Queued", "time": "18.03.2026 18:05"},
-                {"status": "Running", "time": "18.03.2026 18:05"},
-                {"status": "Failed", "time": "18.03.2026 18:05"},
-            ],
-        },
+    match_pairs = [
+        ("B-001", "B-002", "Finished", "B-001 win", "B-001", 18, 5, 19000),
+        ("B-002", "B-003", "Finished", "B-002 win", "B-002", 12, 4, 11000),
+        ("B-003", "B-001", "Failed", "runtime error", None, 4, 3, 4000),
+        ("B-004", "B-005", "Finished", "draw", None, 225, 6, 46000),
+        ("B-005", "B-006", "Finished", "B-005 win", "B-005", 31, 5, 22000),
+        ("B-006", "B-008", "Running", "running", None, 44, 4, 0),
+        ("B-008", "B-001", "Queued", "queued", None, 0, 1, 0),
+        ("B-004", "B-002", "Finished", "B-004 win", "B-004", 27, 5, 20000),
     ]
-    db.matches.insert_many(matches)
 
+    matches = []
     events = []
     marks = ["X", "O"]
-
-    for idx in range(18):
-        bot_id = "B-001" if idx % 2 == 0 else "B-002"
-        events.append({
-            "id": f"E-2847-{idx + 1:03d}", "match_id": "M-2847", "seq": idx + 1, "kind": "move",
-            "ts": f"2026-03-20T15:00:{idx:02d}+00:00", "bot_id": bot_id,
-            "payload": {"mark": marks[idx % 2], "x": idx - 5, "y": (idx * 2) % 9 - 4, "decision_ms": 12 + idx},
+    for i, (bot_a, bot_b, status, result, winner, moves_count, log_count, duration) in enumerate(match_pairs, start=1):
+        match_id = f"M-{2844 + i}"
+        started = _iso(12 + i, 10 + i % 8, i)
+        finished = None if status in {"Queued", "Running"} else _iso(12 + i, 10 + i % 8, min(i + 1, 59))
+        history = [{"status": "Queued", "time": started}]
+        if status in {"Running", "Finished", "Failed"}:
+            history.append({"status": "Running", "time": started})
+        if status in {"Finished", "Failed"}:
+            history.append({"status": status, "time": finished})
+        matches.append({
+            "id": match_id,
+            "bot_a_id": bot_a,
+            "bot_b_id": bot_b,
+            "rules": "Поле 19×19; победа: 5 в ряд",
+            "win_condition": 5,
+            "started_at": started,
+            "finished_at": finished,
+            "status": status,
+            "result": result,
+            "winner_bot_id": winner,
+            "moves_count": moves_count,
+            "log_count": log_count,
+            "duration_ms": duration,
+            "board": {"width": 19, "height": 19, "min_x": -9, "max_x": 9, "min_y": -9, "max_y": 9, "win_condition": 5},
+            "comment": "Демонстрационный матч для просмотра статусов и истории ходов.",
+            "status_history": history,
         })
+        for seq in range(1, min(moves_count, 24) + 1):
+            current_bot = bot_a if seq % 2 else bot_b
+            events.append({
+                "id": f"E-{match_id}-{seq:03d}",
+                "match_id": match_id,
+                "seq": seq,
+                "kind": "move",
+                "ts": _iso(12 + i, 10 + i % 8, min(i + seq, 59)),
+                "bot_id": current_bot,
+                "payload": {"mark": marks[(seq - 1) % 2], "x": seq - 10, "y": (seq * i) % 11 - 5, "decision_ms": 7 + seq + i},
+            })
+        for j in range(1, log_count + 1):
+            level = "ERROR" if status == "Failed" and j == log_count else ("WARN" if status == "Running" and j == log_count else "INFO")
+            message = {
+                "INFO": f"match {match_id}: processed step {j}",
+                "WARN": "decision time close to limit",
+                "ERROR": "RuntimeError: invalid move outside allowed window",
+            }[level]
+            events.append({
+                "id": f"E-{match_id}-L{j:03d}",
+                "match_id": match_id,
+                "seq": min(moves_count, 24) + j,
+                "kind": "log",
+                "ts": _iso(12 + i, 10 + i % 8, min(i + j + 30, 59)),
+                "bot_id": bot_a if j % 2 else bot_b,
+                "payload": {"level": level, "message": message, "source": "stderr"},
+            })
 
-    log_messages = [
-        (19, "B-001", "INFO", "selected candidate (12,-4) with score 0.82"),
-        (20, "B-002", "INFO", "blocked diagonal threat near (7,1)"),
-        (21, "B-001", "DEBUG", "expanded 143 candidate cells"),
-        (22, "B-002", "WARN", "decision time close to limit"),
-        (23, "B-001", "INFO", "finished with diagonal sequence"),
-    ]
-
-    for seq, bot_id, level, msg in log_messages:
-        events.append({
-            "id": f"E-2847-{seq:03d}", "match_id": "M-2847", "seq": seq, "kind": "log",
-            "ts": f"2026-03-20T15:00:{min(seq, 59):02d}+00:00", "bot_id": bot_id,
-            "payload": {"level": level, "message": msg, "source": "stderr"},
-        })
-
-    for idx in range(12):
-        bot_id = "B-002" if idx % 2 == 0 else "B-003"
-        events.append({
-            "id": f"E-2846-{idx + 1:03d}", "match_id": "M-2846", "seq": idx + 1, "kind": "move",
-            "ts": f"2026-03-19T12:30:{idx:02d}+00:00", "bot_id": bot_id,
-            "payload": {"mark": marks[idx % 2], "x": idx - 3, "y": idx % 5, "decision_ms": 10 + idx},
-        })
-
-    for seq, bot_id, level, msg in [
-        (13, "B-002", "INFO", "match started"),
-        (14, "B-003", "DEBUG", "random seed initialized"),
-        (15, "B-002", "INFO", "forced fork detected"),
-        (16, "B-003", "INFO", "match finished"),
-    ]:
-        events.append({
-            "id": f"E-2846-{seq:03d}", "match_id": "M-2846", "seq": seq, "kind": "log",
-            "ts": f"2026-03-19T12:30:{seq:02d}+00:00", "bot_id": bot_id,
-            "payload": {"level": level, "message": msg, "source": "stderr"},
-        })
-
-    for idx in range(4):
-        events.append({
-            "id": f"E-2845-{idx + 1:03d}", "match_id": "M-2845", "seq": idx + 1,
-            "kind": "move", "ts": f"2026-03-18T18:05:0{idx}+00:00",
-            "bot_id": "B-003" if idx % 2 == 0 else "B-001",
-            "payload": {"mark": marks[idx % 2], "x": idx, "y": -idx, "decision_ms": 8},
-        })
-
-    for seq, bot_id, level, msg in [
-        (5, "B-003", "INFO", "process started"),
-        (6, "B-003", "ERROR", "RuntimeError: invalid move outside allowed window"),
-        (7, "B-001", "INFO", "opponent failed, match stopped"),
-    ]:
-        events.append({
-            "id": f"E-2845-{seq:03d}", "match_id": "M-2845", "seq": seq, "kind": "log",
-            "ts": f"2026-03-18T18:05:0{min(seq, 9)}+00:00", "bot_id": bot_id,
-            "payload": {"level": level, "message": msg, "source": "stderr"},
-        })
-
+    db.matches.insert_many(matches)
     db.match_events.insert_many(events)
+
+    db.reports.insert_many([
+        {"id": f"R-{i:03d}", "name": f"Отчёт по ботам {i}", "config": {"dataset": "Матчи", "metrics": ["winrate", "duration"], "groupBy": "Бот", "chartType": "bar", "filters": []}, "created_by": "admin@arena.local", "created_at": _iso(20, 8, i)}
+        for i in range(1, 9)
+    ])
+    db.import_export_history.insert_many([
+        {"id": f"OP-{i:03d}", "type": "export" if i % 2 else "import", "entity": "Все данные", "format": "JSON", "fileName": f"bot-arena-dump-{i}.json", "rows": 8 + i, "status": "success", "createdBy": "admin@arena.local", "createdAt": _iso(21, 9, i)}
+        for i in range(1, 9)
+    ])
+    db.app_settings.insert_one({
+        "id": "global",
+        "sandboxTimeLimit": 5000,
+        "sandboxMemoryLimit": 512,
+        "defaultLogLevel": "INFO",
+        "logRetention": "30 дней",
+        "updatedAt": now_iso(),
+    })
 
     db.bots.create_index([("name", 1)])
     db.bots.create_index([("language", 1)])

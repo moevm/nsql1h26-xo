@@ -67,5 +67,4 @@ def auth_register(payload: RegisterRequest) -> dict[str, Any]:
 
 @router.post("/forgot-password")
 def forgot_password(payload: ForgotPasswordRequest) -> dict[str, str]:
-    # В прототипе письма реально не отправляются: endpoint фиксирует успешный сценарий без раскрытия, есть ли email в базе.
     return {"message": f"Если {payload.email} есть в системе, инструкции будут отправлены"}

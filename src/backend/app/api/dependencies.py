@@ -40,8 +40,6 @@ def current_user(authorization: str | None = Header(default=None)) -> dict[str, 
     if not cached_user:
         raise HTTPException(status_code=401, detail="Сессия не найдена или истекла")
 
-    # Роль пользователя могла быть изменена администратором после логина.
-    # Поэтому на каждом защищённом запросе перечитываем пользователя из MongoDB.
     try:
         from app.db.connection import get_db
 
@@ -55,7 +53,6 @@ def current_user(authorization: str | None = Header(default=None)) -> dict[str, 
             TOKENS[token] = api_user
             return api_user
     except Exception:
-        # Если БД временно недоступна, используем кэш токена: сам факт авторизации уже был проверен.
         pass
 
     return cached_user

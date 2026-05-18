@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { Eye, EyeOff } from 'lucide-react';
 import { Button } from '../components/Button';
 import { login } from '../api/client';
@@ -144,6 +144,7 @@ export function Login() {
                   />
                   <span className="text-gray-700">Запомнить меня</span>
                 </label>
+                <Link to="/forgot-password" className="text-blue-600 hover:underline">Забыли пароль?</Link>
               </div>
 
               <Button type="submit" variant="primary" loading={loading} className="w-full">
@@ -151,6 +152,9 @@ export function Login() {
               </Button>
             </div>
           </form>
+          <div className="mt-6 text-center text-sm text-gray-600">
+            Нет аккаунта? <Link to="/register" className="text-blue-600 hover:underline font-medium">Зарегистрироваться</Link>
+          </div>
         </div>
       </div>
     </div>

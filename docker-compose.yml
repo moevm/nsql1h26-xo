@@ -3,33 +3,88 @@ services:
     image: mongo:7
     container_name: bot-arena-db
     restart: unless-stopped
-    ports:
-      - "27017:27017"
+    
     volumes:
       - mongo_data:/data/db
+    
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  bot-runner:
+    build:
+      context: ./src/bot-runner
+    container_name: bot-arena-runner
+    restart: unless-stopped
+    
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid,nodev
+    
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.50
+    
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'python -c "import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8090/health\", timeout=2).read()"'
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   backend:
     build:
       context: ./src/backend
+    
     container_name: bot-arena-backend
     restart: unless-stopped
+    
     environment:
       MONGO_URL: mongodb://db:27017
       MONGO_DB: bot_arena
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      BOT_RUNNER_URL: http://bot-runner:8090
+      MAX_BOT_UPLOAD_BYTES: "5242880"
+      MAX_IMPORT_UPLOAD_BYTES: "20971520"
+    
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      bot-runner:
+        condition: service_healthy
+    
     ports:
-      - "8000:8000"
-
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+  
   frontend:
     build:
       context: ./src/frontend
+    
     container_name: bot-arena-frontend
     restart: unless-stopped
+    
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    
     ports:
-      - "3000:8080"
+      - "127.0.0.1:3000:8080"
 
 volumes:
   mongo_data:

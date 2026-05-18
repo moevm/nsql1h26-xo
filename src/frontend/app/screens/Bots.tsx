@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { Plus, Search, X, Eye, Play } from 'lucide-react';
+import { Plus, Search, X, Eye, Play, Download } from 'lucide-react';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, CardBody } from '../components/Card';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { Table, Column } from '../components/Table';
-import { BotRecord, getBots } from '../api/client';
+import { BotRecord, downloadBotSource, getBots, getCurrentUser } from '../api/client';
+import { canManageBots } from '../auth/permissions';
+import { toast } from 'sonner';
 
 const emptyFilters = {
   id: '',
@@ -24,6 +26,7 @@ export function Bots() {
   const [filters, setFilters] = useState(emptyFilters);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const canUpload = canManageBots(getCurrentUser());
 
   const loadBots = () => {
     setLoading(true);
@@ -91,6 +94,21 @@ export function Bots() {
           <Link to={`/matches?bot=${bot.id}`} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Матчи">
             <Play className="w-4 h-4" />
           </Link>
+          <button
+            type="button"
+            className="p-2 text-gray-600 hover:bg-gray-50 rounded-lg"
+            title="Скачать файл бота"
+            onClick={async () => {
+              try {
+                await downloadBotSource(bot.id, bot.fileName || `${bot.id}.py`);
+                toast.success('Файл бота скачан');
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : 'Не удалось скачать файл бота');
+              }
+            }}
+          >
+            <Download className="w-4 h-4" />
+          </button>
         </div>
       ),
     },
@@ -103,12 +121,14 @@ export function Bots() {
           <h1 className="text-3xl font-bold text-gray-900">Боты</h1>
           <p className="text-gray-600 mt-1">Просмотр, фильтрация и загрузка пользовательских ботов</p>
         </div>
-        <Link to="/bots/upload">
-          <Button variant="primary">
-            <Plus className="w-4 h-4" />
-            Загрузить бота
-          </Button>
-        </Link>
+        {canUpload && (
+          <Link to="/bots/upload">
+            <Button variant="primary">
+              <Plus className="w-4 h-4" />
+              Загрузить бота
+            </Button>
+          </Link>
+        )}
       </div>
 
       <Card className="mb-6">

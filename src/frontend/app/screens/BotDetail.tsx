@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
-import { Download, Play, Upload, ArrowLeft } from 'lucide-react';
+import { Download, Play, Upload, ArrowLeft, Edit3 } from 'lucide-react';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, CardBody } from '../components/Card';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { BotRecord, MatchRecord, getBot, getMatches } from '../api/client';
+import { BotRecord, MatchRecord, downloadBotSource, getBot, getMatches, getCurrentUser, updateBot } from '../api/client';
+import { canManageBots } from '../auth/permissions';
+import { toast } from 'sonner';
 
 export function BotDetail() {
   const { id } = useParams();
@@ -14,17 +16,66 @@ export function BotDetail() {
   const [activeTab, setActiveTab] = useState<'overview' | 'files' | 'matches' | 'run'>('overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [runSettings, setRunSettings] = useState({ maxMoves: '225', moveTimeoutMs: '1000' });
+  const [savingRunSettings, setSavingRunSettings] = useState(false);
+  const canManage = canManageBots(getCurrentUser());
 
   useEffect(() => {
     if (!id) return;
     Promise.all([getBot(id), getMatches({ bot: id })])
       .then(([botData, matchData]) => {
         setBot(botData);
+        setRunSettings({
+          maxMoves: String(botData.runSettings?.maxMoves || 225),
+          moveTimeoutMs: String(botData.runSettings?.moveTimeoutMs || 1000),
+        });
         setMatches(matchData);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   }, [id]);
+
+  const handleDownload = async () => {
+    if (!bot) return;
+    try {
+      await downloadBotSource(bot.id, bot.fileName || `${bot.id}.py`);
+      toast.success('Файл бота скачан');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось скачать файл бота');
+    }
+  };
+
+
+  const handleRunSettingsSave = async () => {
+    if (!bot) return;
+
+    const maxMoves = Number(runSettings.maxMoves);
+    const moveTimeoutMs = Number(runSettings.moveTimeoutMs);
+
+    if (!Number.isFinite(maxMoves) || maxMoves < 1) {
+      toast.error('Лимит ходов должен быть положительным числом');
+      return;
+    }
+    if (!Number.isFinite(moveTimeoutMs) || moveTimeoutMs < 100) {
+      toast.error('Таймаут хода должен быть не меньше 100 мс');
+      return;
+    }
+
+    setSavingRunSettings(true);
+    try {
+      const updated = await updateBot(bot.id, { runSettings: { maxMoves, moveTimeoutMs } });
+      setBot(updated);
+      setRunSettings({
+        maxMoves: String(updated.runSettings?.maxMoves || maxMoves),
+        moveTimeoutMs: String(updated.runSettings?.moveTimeoutMs || moveTimeoutMs),
+      });
+      toast.success('Настройки запуска сохранены');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось сохранить настройки запуска');
+    } finally {
+      setSavingRunSettings(false);
+    }
+  };
 
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>;
@@ -45,16 +96,26 @@ export function BotDetail() {
           <p className="text-gray-600 mt-1">{bot.id} • версия {bot.version} • {bot.language}</p>
         </div>
         <div className="flex gap-3">
-          <Button variant="secondary">
+          {canManage && (
+            <Link to={`/bots/${bot.id}/edit`}>
+              <Button variant="secondary">
+                <Edit3 className="w-4 h-4" />
+                Редактировать
+              </Button>
+            </Link>
+          )}
+          <Button variant="secondary" onClick={handleDownload}>
             <Download className="w-4 h-4" />
-            Скачать данные
+            Скачать файл
           </Button>
-          <Link to="/bots/upload">
-            <Button variant="secondary">
-              <Upload className="w-4 h-4" />
-              Заменить версию
-            </Button>
-          </Link>
+          {canManage && (
+            <Link to="/bots/upload">
+              <Button variant="secondary">
+                <Upload className="w-4 h-4" />
+                Заменить версию
+              </Button>
+            </Link>
+          )}
           <Link to={`/matches?bot=${bot.id}`}>
             <Button>
               <Play className="w-4 h-4" />
@@ -144,10 +205,10 @@ export function BotDetail() {
           {activeTab === 'files' && (
             <div className="p-4 border border-gray-200 rounded-lg flex items-center justify-between">
               <div>
-                <p className="font-medium text-gray-900">{bot.fileName || 'source.zip'}</p>
+                <p className="font-medium text-gray-900">{bot.fileName || 'source.py'}</p>
                 <p className="text-sm text-gray-500">{bot.sizeBytes || 1024} байт • {bot.hash}</p>
               </div>
-              <Button variant="secondary"><Download className="w-4 h-4" />Скачать</Button>
+              <Button variant="secondary" onClick={handleDownload}><Download className="w-4 h-4" />Скачать файл</Button>
             </div>
           )}
           {activeTab === 'matches' && (
@@ -167,15 +228,40 @@ export function BotDetail() {
             </div>
           )}
           {activeTab === 'run' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block mb-2">Лимит ходов</label>
-                <input className="w-full px-4 py-2.5 bg-input-background rounded-lg border border-transparent" value="225" readOnly />
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block mb-2">Лимит ходов</label>
+                  <input
+                    type="number"
+                    className="w-full px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:text-gray-500"
+                    value={runSettings.maxMoves}
+                    min="1"
+                    max="1000"
+                    disabled={!canManage}
+                    onChange={(event) => setRunSettings((value) => ({ ...value, maxMoves: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2">Таймаут хода, мс</label>
+                  <input
+                    type="number"
+                    className="w-full px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:text-gray-500"
+                    value={runSettings.moveTimeoutMs}
+                    min="100"
+                    max="30000"
+                    disabled={!canManage}
+                    onChange={(event) => setRunSettings((value) => ({ ...value, moveTimeoutMs: event.target.value }))}
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block mb-2">Таймаут хода</label>
-                <input className="w-full px-4 py-2.5 bg-input-background rounded-lg border border-transparent" value="1000 мс" readOnly />
-              </div>
+              {canManage ? (
+                <div className="flex justify-end">
+                  <Button type="button" onClick={handleRunSettingsSave} loading={savingRunSettings}>Сохранить настройки запуска</Button>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">Изменение настроек доступно модератору или администратору.</p>
+              )}
             </div>
           )}
         </CardBody>

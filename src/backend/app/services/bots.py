@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import HTTPException
 from fastapi.responses import Response
@@ -16,7 +17,7 @@ def bot_to_api(bot: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": bot["id"],
         "name": bot.get("name", ""),
-        "language": bot.get("language", ""),
+        "language": "Python",
         "version": bot.get("version", ""),
         "tags": bot.get("tags", []),
         "status": bot.get("status", "active"),
@@ -35,6 +36,10 @@ def bot_to_api(bot: dict[str, Any]) -> dict[str, Any]:
         "losses": stats.get("losses", 0),
         "draws": stats.get("draws", 0),
         "elo": stats.get("elo", 0),
+        "runSettings": {
+            "maxMoves": int((bot.get("run_settings") or {}).get("max_moves") or 225),
+            "moveTimeoutMs": int((bot.get("run_settings") or {}).get("move_timeout_ms") or 1000),
+        },
     }
 
 
@@ -50,10 +55,15 @@ def build_bot_download_response(bot_id: str) -> Response:
 
     if source_blob:
         filename = bot.get("file_name") or f"{bot_id}.zip"
+        safe_filename = str(filename).replace('"', '')
+        encoded_filename = quote(safe_filename)
         return Response(
             content=bytes(source_blob),
             media_type="application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=UTF-8''{encoded_filename}",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     content = "\n".join([

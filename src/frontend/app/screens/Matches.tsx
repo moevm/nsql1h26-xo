@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
-import { Search, X, Eye } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
+import { Plus, Search, X, Eye } from 'lucide-react';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, CardBody } from '../components/Card';
@@ -71,9 +71,17 @@ export function Matches() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">Матчи</h1>
-        <p className="text-gray-600 mt-1">Карточки запусков, результаты и история статусов</p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Матчи</h1>
+          <p className="text-gray-600 mt-1">Карточки запусков, результаты и история статусов</p>
+        </div>
+        <Link to="/matches/create">
+          <Button variant="primary">
+            <Plus className="w-4 h-4" />
+            Создать матч
+          </Button>
+        </Link>
       </div>
 
       <Card className="mb-6">

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router';
-import { ArrowLeft, Download, Search } from 'lucide-react';
+import { ArrowLeft, Download, Search, Edit3 } from 'lucide-react';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Card, CardBody } from '../components/Card';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { LogRecord, getLog } from '../api/client';
+import { LogRecord, downloadLogSource, getCurrentUser, getLog } from '../api/client';
+import { canViewLogs } from '../auth/permissions';
 
 export function LogViewer() {
   const { id } = useParams();
@@ -13,6 +14,7 @@ export function LogViewer() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const canEdit = canViewLogs(getCurrentUser());
 
   useEffect(() => {
     if (!id) return;
@@ -46,9 +48,25 @@ export function LogViewer() {
           </div>
           <p className="text-gray-600 mt-1">{log.type} • матч {log.relatedMatch} • {log.size}</p>
         </div>
-        <a href={`/api/logs/${log.id}/download`}>
-          <Button variant="secondary"><Download className="w-4 h-4" />Скачать</Button>
-        </a>
+        <div className="flex gap-3">
+          {canEdit && (
+            <Link to={`/logs/${log.id}/edit`}>
+              <Button variant="secondary"><Edit3 className="w-4 h-4" />Редактировать</Button>
+            </Link>
+          )}
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              try {
+                await downloadLogSource(log.id, `${log.id}.log`);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Не удалось скачать лог');
+              }
+            }}
+          >
+            <Download className="w-4 h-4" />Скачать
+          </Button>
+        </div>
       </div>
 
       <Card className="mb-6">

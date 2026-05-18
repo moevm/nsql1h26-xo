@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ArrowLeft,
@@ -7,12 +7,14 @@ import {
   StepBack,
   StepForward,
   Send,
+  Edit3,
 } from "lucide-react";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card, CardBody } from "../components/Card";
 import { LoadingSpinner } from "../components/LoadingSpinner";
-import { MatchRecord, getMatch } from "../api/client";
+import { MatchRecord, getCurrentUser, getMatch } from "../api/client";
+import { canUseAnalysisTools } from "../auth/permissions";
 
 export function MatchDetail() {
   const { id } = useParams();
@@ -26,6 +28,7 @@ export function MatchDetail() {
   const [comments, setComments] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const canEdit = canUseAnalysisTools(getCurrentUser());
 
   useEffect(() => {
     if (!id) return;
@@ -72,21 +75,46 @@ export function MatchDetail() {
     return () => window.clearInterval(timer);
   }, [isPlaying, match, moveEvents.length]);
 
-  const boardCells = useMemo(() => {
-    const cells = Array.from({ length: 25 }).map((_, index) => ({
-      key: String(index),
-      mark: "",
-    }));
+  const boardView = useMemo(() => {
+    const rawBoard = match?.board || {};
+    const rawSize = Number(rawBoard.width || rawBoard.size || rawBoard.boardSize || 15);
+    const size = Number.isFinite(rawSize) ? Math.max(3, Math.min(25, Math.trunc(rawSize))) : 15;
+    const half = Math.floor(size / 2);
+    const minX = -half;
+    const maxX = minX + size - 1;
+    const minY = -half;
+    const maxY = minY + size - 1;
 
-    const startIndex = Math.max(0, visibleMoves.length - 25);
-    const movesForBoard = visibleMoves.slice(startIndex);
+    const marks = new Map<string, { mark: string; seq: number; botName?: string }>();
 
-    movesForBoard.forEach((event, index) => {
-      cells[index].mark = event.payload?.mark || "";
+    visibleMoves.forEach((event) => {
+      const x = Number(event.payload?.x);
+      const y = Number(event.payload?.y);
+      const mark = String(event.payload?.mark || "");
+
+      if (!Number.isInteger(x) || !Number.isInteger(y) || !mark) return;
+      marks.set(`${x}:${y}`, { mark, seq: event.seq, botName: event.botName });
     });
 
-    return cells;
-  }, [visibleMoves]);
+    const rows = [];
+    for (let y = maxY; y >= minY; y -= 1) {
+      const cells = [];
+      for (let x = minX; x <= maxX; x += 1) {
+        const placed = marks.get(`${x}:${y}`);
+        cells.push({
+          key: `${x}:${y}`,
+          x,
+          y,
+          mark: placed?.mark || "",
+          seq: placed?.seq,
+          botName: placed?.botName,
+        });
+      }
+      rows.push({ y, cells });
+    }
+
+    return { size, minX, maxX, minY, maxY, rows };
+  }, [match?.board, visibleMoves]);
 
   const addComment = () => {
     if (!comment.trim()) return;
@@ -137,6 +165,14 @@ export function MatchDetail() {
             {match.botAName} vs {match.botBName}
           </p>
         </div>
+        {canEdit && (
+          <Link to={`/matches/${match.id}/edit`}>
+            <Button variant="secondary">
+              <Edit3 className="w-4 h-4" />
+              Редактировать
+            </Button>
+          </Link>
+        )}
       </div>
 
       <Card className="mb-6">
@@ -218,26 +254,62 @@ export function MatchDetail() {
         </div>
         <CardBody>
           {activeTab === "overview" && (
-            <div className="grid grid-cols-1 lg:grid-cols-[190px_minmax(0,1fr)] gap-6 items-start">
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)] gap-6 items-start">
               <div>
-                <h3 className="text-md font-semibold text-gray-900 mb-4">
+                <h3 className="text-md font-semibold text-gray-900 mb-2">
                   Поле / Replay
                 </h3>
+                <p className="text-xs text-gray-500 mb-3">
+                  {boardView.size}×{boardView.size}, X: {boardView.minX}..{boardView.maxX},
+                  Y: {boardView.minY}..{boardView.maxY}. Победа: {match.winCondition || 5} в ряд.
+                </p>
 
-                <div className="inline-block bg-gray-100 border border-gray-300 rounded-lg p-1.5 overflow-hidden">
-                  <div className="grid grid-cols-5 gap-1">
-                    {boardCells.map((cell) => (
+                <div className="max-w-full overflow-auto pb-2">
+                  <div
+                    className="inline-grid gap-1 bg-gray-100 border border-gray-300 rounded-lg p-1.5"
+                    style={{ gridTemplateColumns: `32px repeat(${boardView.size}, 28px)` }}
+                  >
+                    <div className="h-7" />
+                    {Array.from({ length: boardView.size }, (_, index) => boardView.minX + index).map((x) => (
                       <div
-                        key={cell.key}
-                        className="w-7 h-7 bg-white rounded border border-gray-200 flex items-center justify-center text-sm leading-none font-bold text-gray-700"
+                        key={`x-${x}`}
+                        className="h-7 flex items-center justify-center text-[10px] text-gray-500"
                       >
-                        {cell.mark}
+                        {x}
                       </div>
+                    ))}
+
+                    {boardView.rows.map((row) => (
+                      <Fragment key={`row-${row.y}`}>
+                        <div className="w-8 h-7 flex items-center justify-center text-[10px] text-gray-500">
+                          {row.y}
+                        </div>
+                        {row.cells.map((cell) => (
+                          <div
+                            key={cell.key}
+                            title={
+                              cell.mark
+                                ? `Ход #${cell.seq}: ${cell.mark} (${cell.x}, ${cell.y}) ${cell.botName || ""}`
+                                : `(${cell.x}, ${cell.y})`
+                            }
+                            className={
+                              `w-7 h-7 bg-white rounded border flex items-center justify-center text-sm leading-none font-bold ` +
+                              (cell.mark === "X"
+                                ? "border-blue-300 text-blue-700"
+                                : cell.mark === "O"
+                                  ? "border-violet-300 text-violet-700"
+                                  : "border-gray-200 text-gray-700")
+                            }
+                          >
+                            {cell.mark}
+                          </div>
+                        ))}
+                      </Fragment>
                     ))}
                   </div>
                 </div>
 
-                <div className="mt-4 space-y-3 max-w-[190px]">
+                <div className="mt-4 space-y-3 max-w-[260px]">
                   <div className="flex items-center gap-2">
                     <Button
                       variant="secondary"

@@ -9,9 +9,11 @@ def _iso(day: int, hour: int = 12, minute: int = 0) -> str:
 
 
 def seed_database() -> None:
+    """Наполняет пустую MongoDB демонстрационными данными при старте приложения."""
     wait_for_database()
     db = get_db()
 
+    # Если основные данные уже есть, не перезатираем состояние пользователя.
     if db.bots.count_documents({}) > 0:
         return
     

@@ -4,6 +4,8 @@ import os
 
 from fastapi import HTTPException, UploadFile
 
+# Лимиты выбраны так, чтобы обычные .py-боты и небольшие архивы проходили,
+# а слишком большие файлы не читались целиком в память backend.
 MAX_BOT_UPLOAD_BYTES = int(os.getenv("MAX_BOT_UPLOAD_BYTES", str(5 * 1024 * 1024)))
 MAX_IMPORT_UPLOAD_BYTES = int(os.getenv("MAX_IMPORT_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 READ_CHUNK_BYTES = 1024 * 1024
@@ -18,6 +20,7 @@ def format_bytes(value: int) -> str:
 
 
 async def read_upload_limited(file: UploadFile, *, max_bytes: int, label: str) -> bytes:
+    """Читает UploadFile порциями и возвращает понятную 413-ошибку при превышении лимита."""
     chunks: list[bytes] = []
     total = 0
 

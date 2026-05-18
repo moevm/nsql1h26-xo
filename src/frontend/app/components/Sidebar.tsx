@@ -1,14 +1,36 @@
+import type { ComponentType } from 'react';
 import { NavLink } from 'react-router';
-import { LayoutDashboard, Bot, Swords, FileText } from 'lucide-react';
+import {
+  LayoutDashboard,
+  Bot,
+  Swords,
+  FileText,
+  BarChart3,
+  ArrowRightLeft,
+  Settings,
+  Search,
+  Network,
+} from 'lucide-react';
+import type { UserRole } from '../api/client';
+import { getCurrentUser } from '../api/client';
+import { hasRole } from '../auth/permissions';
 
-const navItems = [
+const navItems: Array<{ to: string; label: string; icon: ComponentType<{ className?: string }>; exact?: boolean; roles?: UserRole[] }> = [
   { to: '/', label: 'Обзор', icon: LayoutDashboard, exact: true },
   { to: '/bots', label: 'Боты', icon: Bot },
   { to: '/matches', label: 'Матчи', icon: Swords },
-  { to: '/logs', label: 'Логи', icon: FileText },
+  { to: '/logs', label: 'Логи', icon: FileText, roles: ['moderator', 'admin'] },
+  { to: '/statistics', label: 'Статистика', icon: BarChart3 },
+  { to: '/analytics', label: 'Анализ', icon: Network, roles: ['moderator', 'admin'] },
+  { to: '/import-export', label: 'Импорт/Экспорт', icon: ArrowRightLeft, roles: ['moderator', 'admin'] },
+  { to: '/search', label: 'Поиск', icon: Search },
+  { to: '/settings', label: 'Настройки', icon: Settings, roles: ['moderator', 'admin'] },
 ];
 
 export function Sidebar() {
+  const user = getCurrentUser();
+  const visibleItems = navItems.filter((item) => !item.roles || hasRole(user, item.roles));
+
   return (
     <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
       <div className="p-6 border-b border-gray-200">
@@ -17,7 +39,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 p-4 space-y-1">
-        {navItems.map((item) => (
+        {visibleItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

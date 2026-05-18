@@ -34,11 +34,6 @@ def _count_error_logs(bot_id: str) -> int:
 
 @router.post("/cluster")
 def cluster(payload: ClusteringPayload, _: dict[str, Any] = Depends(require_moderator_or_admin)) -> dict[str, Any]:
-    """Строит простую объяснимую кластеризацию по данным из MongoDB.
-
-    Это не фронтовая заглушка: backend читает bots, bot_stats и match_events,
-    рассчитывает признаки и возвращает кластеры + точки для визуализации.
-    """
     db = get_db()
     bots = list(db.bots.find({}, {"_id": 0}))
     stats_by_bot = {row.get("bot_id"): row for row in db.bot_stats.find({}, {"_id": 0})}

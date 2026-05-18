@@ -58,8 +58,6 @@ def update_settings(payload: SettingsPayload, user: dict[str, Any] = Depends(req
 @router.post("/maintenance/clear-old-logs")
 def clear_old_logs(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     db = get_db()
-    # В учебном прототипе удаляем только технические записи старше демонстрационной выборки не будем,
-    # возвращаем количество найденных log-событий как результат операции.
     count = db.match_events.count_documents({"kind": "log"})
     return {"deleted": 0, "availableLogEvents": count}
 

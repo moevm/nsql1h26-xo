@@ -21,7 +21,6 @@ import { LogViewer } from "./screens/LogViewer";
 import { EditLog } from "./screens/EditLog";
 import { Statistics } from "./screens/Statistics";
 import { ReportBuilder } from "./screens/ReportBuilder";
-import { Analytics } from "./screens/Analytics";
 import { ImportExport } from "./screens/ImportExport";
 import { GlobalSearch } from "./screens/GlobalSearch";
 import { Settings } from "./screens/Settings";
@@ -69,8 +68,9 @@ export const router = createBrowserRouter([
       { path: "logs/:id", Component: LogViewer },
       { path: "logs/:id/edit", Component: ModeratorRoute(EditLog) },
       { path: "statistics", Component: Statistics },
-      { path: "statistics/report-builder", Component: ModeratorRoute(ReportBuilder) },
-      { path: "analytics", Component: ModeratorRoute(Analytics) },
+      { path: "statistics/custom", Component: ReportBuilder },
+      { path: "statistics/report-builder", Component: ReportBuilder },
+      { path: "analytics", Component: ReportBuilder },
       { path: "import-export", Component: ModeratorRoute(ImportExport) },
       { path: "search", Component: GlobalSearch },
       { path: "settings", Component: AdminRoute(Settings) },

@@ -10,33 +10,72 @@ import { MatchRecord, getMatches } from '../api/client';
 
 const emptyFilters = { id: '', bot: '', status: '', result: '', rules: '' };
 
+function filtersFromParams(params: URLSearchParams) {
+  return {
+    ...emptyFilters,
+    id: params.get('id') || '',
+    bot: params.get('bot') || '',
+    status: params.get('status') || '',
+    result: params.get('result') || '',
+    rules: params.get('rules') || '',
+  };
+}
+
+function filtersToParams(filters: typeof emptyFilters, page = 1, pageSize = 10) {
+  const nextParams = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value.trim()) nextParams.set(key, value.trim());
+  });
+  if (page > 1) nextParams.set('page', String(page));
+  if (pageSize !== 10) nextParams.set('page_size', String(pageSize));
+  return nextParams;
+}
+
 export function Matches() {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
-  const [filters, setFilters] = useState({ ...emptyFilters, bot: params.get('bot') || '' });
+  const [params, setParams] = useSearchParams();
+  const [filters, setFilters] = useState(() => filtersFromParams(params));
   const [matches, setMatches] = useState<MatchRecord[]>([]);
+  const [page, setPage] = useState(Number(params.get('page') || 1));
+  const [pageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const loadMatches = () => {
+  const loadMatches = (nextPage = 1) => {
+    setPage(nextPage);
+    setParams(filtersToParams(filters, nextPage, pageSize));
     setLoading(true);
     setError('');
-    getMatches(filters)
-      .then(setMatches)
+    getMatches({ ...filters, page: String(nextPage), page_size: String(pageSize) })
+      .then((payload) => {
+        setMatches(payload.items);
+        setPage(payload.page);
+        setTotal(payload.total);
+        setTotalPages(payload.totalPages);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    loadMatches();
+    loadMatches(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearFilters = () => {
     setFilters(emptyFilters);
+    setParams({});
     setLoading(true);
-    getMatches({})
-      .then(setMatches)
+    setPage(1);
+    getMatches({ page: '1', page_size: String(pageSize) })
+      .then((payload) => {
+        setMatches(payload.items);
+        setPage(payload.page);
+        setTotal(payload.total);
+        setTotalPages(payload.totalPages);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   };
@@ -97,7 +136,7 @@ export function Matches() {
             <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Результат" value={filters.result} onChange={(e) => setFilters({ ...filters, result: e.target.value })} />
             <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Правила" value={filters.rules} onChange={(e) => setFilters({ ...filters, rules: e.target.value })} />
             <div className="flex gap-2">
-              <Button variant="primary" onClick={loadMatches} className="flex-1">Применить</Button>
+              <Button variant="primary" onClick={() => loadMatches(1)} className="flex-1">Применить</Button>
               <Button variant="secondary" onClick={clearFilters}><X className="w-4 h-4" /></Button>
             </div>
           </div>
@@ -105,7 +144,15 @@ export function Matches() {
       </Card>
 
       {error && <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
-      {loading ? <LoadingSpinner /> : <Table columns={columns} data={matches} emptyMessage="Матчи по заданным фильтрам не найдены" onRowClick={(row) => navigate(`/matches/${row.id}`)} />}
+      {loading ? <LoadingSpinner /> : (
+        <Table
+          columns={columns}
+          data={matches}
+          emptyMessage="Матчи по заданным фильтрам не найдены"
+          onRowClick={(row) => navigate(`/matches/${row.id}`)}
+          pagination={{ page, pageSize, total, totalPages, onPageChange: loadMatches }}
+        />
+      )}
     </div>
   );
 }

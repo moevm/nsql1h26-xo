@@ -1,278 +1,241 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Breadcrumbs } from '../components/Breadcrumbs';
-import { Card, CardBody, CardHeader } from '../components/Card';
-import { Button } from '../components/Button';
-import { Badge } from '../components/Badge';
-import {
-  Save,
-  Download,
-  Share2,
-  Plus,
-  X,
-  BarChart3,
-  LineChart,
-  PieChart,
-  Table as TableIcon,
-  AlertCircle,
-  CheckCircle2,
-  Lightbulb,
-} from 'lucide-react';
+import { Bar, BarChart as ReBarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AlertCircle, Plus, Save, Trash2, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { previewReport, saveReport } from '../api/client';
-import {
-  Bar,
-  BarChart as ReBarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart as ReLineChart,
-  Pie,
-  PieChart as RePieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
+import { Badge } from '../components/Badge';
+import { Breadcrumbs } from '../components/Breadcrumbs';
+import { Button } from '../components/Button';
+import { Card, CardBody, CardHeader } from '../components/Card';
+import { CustomReportPayload, ReportFilterConfig, SavedReport, getCurrentUser, getSavedReports, previewReport, saveReport } from '../api/client';
+import { canViewLogs } from '../auth/permissions';
 
-const datasets = ['Матчи', 'Ходы', 'Ошибки'];
-const metrics = ['Винрейт', 'Среднее ходов', 'Длительность', 'Количество ошибок'];
-const groupByOptions = ['Бот', 'Правила', 'Дата', 'Нет группировки'];
-const chartTypes = [
-  { id: 'line', name: 'Линейный', icon: LineChart },
-  { id: 'bar', name: 'Столбчатый', icon: BarChart3 },
-  { id: 'pie', name: 'Круговой', icon: PieChart },
-  { id: 'table', name: 'Таблица', icon: TableIcon },
+const datasetFields: Record<string, string[]> = {
+  Матчи: ['Дата', 'Статус', 'Результат', 'Правила', 'Бот A', 'Бот B', 'Победитель', 'Ходы', 'Длительность, сек'],
+  Боты: ['Название', 'Язык', 'Версия', 'Статус', 'Видимость', 'Владелец', 'ELO', 'Матчи', 'Победы', 'Поражения'],
+  Логи: ['Дата', 'Тип', 'Уровень', 'Матч', 'Размер'],
+};
+
+const chartColors = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#ea580c', '#0891b2', '#4f46e5', '#be123c'];
+const operators = [
+  { value: 'contains', label: 'содержит' },
+  { value: '=', label: '=' },
+  { value: '!=', label: '≠' },
+  { value: '>', label: '>' },
+  { value: '<', label: '<' },
+  { value: '>=', label: '≥' },
+  { value: '<=', label: '≤' },
 ];
 
-const chartColors = ['#2563eb', '#16a34a', '#9333ea', '#dc2626', '#f59e0b', '#0891b2'];
-
-interface Filter {
-  id: string;
-  field: string;
-  operator: string;
-  value: string;
+function makeFilter(field: string): ReportFilterConfig {
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    field,
+    operator: 'contains',
+    value: '',
+  };
 }
 
-interface ReportMetric {
-  key: string;
-  label: string;
+function sanitizeChartRows(rows: Array<Record<string, string | number>>, series: string[]) {
+  return rows.map((row) => {
+    const next: Record<string, string | number> = { ...row };
+    series.forEach((item) => {
+      next[item] = Number(row[item] || 0);
+    });
+    return next;
+  });
 }
 
-interface ReportPreview {
-  chartType: string;
-  groupBy: string;
-  metrics: ReportMetric[];
-  rows: Array<Record<string, string | number>>;
-  columns: string[];
-  generatedAt: string;
-}
+function normalizeSavedFilters(value: unknown, fields: string[], reportId: string): ReportFilterConfig[] {
+  if (!Array.isArray(value)) return [];
 
-function downloadTextFile(content: string, fileName: string, type: string) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function toCsv(rows: Array<Record<string, string | number>>, metricsForCsv: ReportMetric[]) {
-  const headers = ['Группа', 'Матчей', ...metricsForCsv.map(metric => metric.label)];
-  const keys = ['name', 'matches', ...metricsForCsv.map(metric => metric.key)];
-  const escape = (value: string | number | undefined) => `"${String(value ?? '').replace(/"/g, '""')}"`;
-  return [headers.map(escape).join(','), ...rows.map(row => keys.map(key => escape(row[key])).join(','))].join('\n');
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item, index) => ({
+      id: typeof item.id === 'string' ? item.id : `saved-${reportId}-${index}`,
+      field: typeof item.field === 'string' && fields.includes(item.field) ? item.field : fields[0] || '',
+      operator: typeof item.operator === 'string' ? item.operator : 'contains',
+      value: typeof item.value === 'string' ? item.value : String(item.value ?? ''),
+    }))
+    .filter((item) => item.field);
 }
 
 export function ReportBuilder() {
-  const navigate = useNavigate();
-  const [reportName, setReportName] = useState('');
-  const [selectedDataset, setSelectedDataset] = useState('Матчи');
-  const [selectedMetrics, setSelectedMetrics] = useState<string[]>([]);
-  const [groupBy, setGroupBy] = useState('Нет группировки');
-  const [chartType, setChartType] = useState('bar');
-  const [filters, setFilters] = useState<Filter[]>([]);
+  const [reportName, setReportName] = useState('Кастомная статистика по матчам');
+  const [dataset, setDataset] = useState('Матчи');
+  const [axisX, setAxisX] = useState('Правила');
+  const [axisY, setAxisY] = useState('Статус');
+  const [chartType, setChartType] = useState<'bar' | 'table'>('bar');
+  const [filters, setFilters] = useState<ReportFilterConfig[]>([makeFilter('Статус')]);
+  const [preview, setPreview] = useState<CustomReportPayload | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
-  const [previewData, setPreviewData] = useState<ReportPreview | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [savedReports, setSavedReports] = useState<SavedReport[]>([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
 
-  const addFilter = () => {
-    const newFilter: Filter = {
-      id: Date.now().toString(),
-      field: 'Статус',
-      operator: '=',
-      value: '',
-    };
-    setFilters([...filters, newFilter]);
-  };
+  const canUseLogDataset = canViewLogs(getCurrentUser());
+  const availableDatasetFields = useMemo(() => {
+    if (canUseLogDataset) return datasetFields;
+    const { Логи: _logs, ...publicDatasets } = datasetFields;
+    return publicDatasets;
+  }, [canUseLogDataset]);
+  const fields = availableDatasetFields[dataset] || [];
+  const chartRows = useMemo(() => sanitizeChartRows(preview?.rows || [], preview?.series || []), [preview]);
+  const hasData = Boolean(preview && preview.rows.length > 0 && preview.series.length > 0);
 
-  const removeFilter = (id: string) => {
-    setFilters(filters.filter(f => f.id !== id));
-  };
-
-  const updateFilter = (id: string, field: keyof Filter, value: string) => {
-    setFilters(filters.map(f => f.id === id ? { ...f, [field]: value } : f));
-  };
-
-  const toggleMetric = (metric: string) => {
-    if (selectedMetrics.includes(metric)) {
-      setSelectedMetrics(selectedMetrics.filter(m => m !== metric));
-    } else {
-      setSelectedMetrics([...selectedMetrics, metric]);
+  useEffect(() => {
+    if (!availableDatasetFields[dataset]) {
+      handleDatasetChange('Матчи');
     }
-  };
+  }, [availableDatasetFields, dataset]);
+
+  useEffect(() => {
+    let mounted = true;
+    setLoadingSaved(true);
+    getSavedReports()
+      .then((items) => {
+        if (mounted) setSavedReports(items);
+      })
+      .catch((err) => toast.error(err instanceof Error ? err.message : 'Не удалось загрузить сохранённые отчёты'))
+      .finally(() => {
+        if (mounted) setLoadingSaved(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const payload = () => ({
+    name: reportName.trim() || 'Кастомный отчёт',
+    dataset,
+    axisX,
+    axisY,
+    chartType,
+    filters: filters.filter((filter) => filter.value.trim()),
+  });
 
   const validate = () => {
     const errors = [];
-    if (!reportName.trim()) errors.push('Название отчёта обязательно');
-    if (selectedMetrics.length === 0) errors.push('Выберите хотя бы одну метрику');
+    if (!reportName.trim()) errors.push('Введите название отчёта');
+    if (!axisX) errors.push('Выберите атрибут для оси X');
+    if (!axisY) errors.push('Выберите атрибут для оси Y');
+    if (axisX === axisY) errors.push('Для наглядной диаграммы выберите разные атрибуты X и Y');
     return errors;
   };
 
-  const buildPayload = () => ({
-    name: reportName || 'Предпросмотр отчёта',
-    dataset: selectedDataset,
-    metrics: selectedMetrics,
-    groupBy,
-    chartType,
-    filters,
-  });
+  const errors = showValidation ? validate() : [];
 
-  const refreshPreview = async (silent = false) => {
-    if (selectedMetrics.length === 0) {
-      setPreviewData(null);
-      return;
-    }
-
-    setIsPreviewLoading(true);
-    try {
-      const data = await previewReport(buildPayload()) as ReportPreview;
-      setPreviewData(data);
-      if (!silent) toast.success('Предпросмотр обновлён');
-    } catch (err) {
-      setPreviewData(null);
-      if (!silent) toast.error(err instanceof Error ? err.message : 'Не удалось построить предпросмотр');
-    } finally {
-      setIsPreviewLoading(false);
-    }
+  const handleDatasetChange = (value: string) => {
+    const nextFields = availableDatasetFields[value] || [];
+    setDataset(value);
+    setAxisX(nextFields[0] || '');
+    setAxisY(nextFields[1] || nextFields[0] || '');
+    setFilters([makeFilter(nextFields[1] || nextFields[0] || '')]);
+    setPreview(null);
   };
 
-  useEffect(() => {
-    if (selectedMetrics.length === 0) {
-      setPreviewData(null);
-      return;
+  const addFilter = () => setFilters((items) => [...items, makeFilter(fields[0] || '')]);
+  const removeFilter = (id: string) => setFilters((items) => items.filter((item) => item.id !== id));
+  const updateFilter = (id: string, key: keyof ReportFilterConfig, value: string) => {
+    setFilters((items) => items.map((item) => item.id === id ? { ...item, [key]: value } : item));
+  };
+
+  const buildPreview = async () => {
+    setShowValidation(true);
+    const currentErrors = validate();
+    if (currentErrors.length > 0) return;
+
+    setLoadingPreview(true);
+    try {
+      const data = await previewReport(payload());
+      setPreview(data);
+      if (data.totalRecords === 0) {
+        toast.warning('По заданным фильтрам данных не найдено');
+      } else {
+        toast.success('Диаграмма построена');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось построить отчёт');
+    } finally {
+      setLoadingPreview(false);
     }
-
-    const timer = window.setTimeout(() => {
-      refreshPreview(true);
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDataset, selectedMetrics, groupBy, chartType, filters, reportName]);
+  };
 
   const handleSave = async () => {
-    const errors = validate();
-    if (errors.length > 0) {
-      setShowValidation(true);
-      toast.error('Пожалуйста, исправьте ошибки');
+    setShowValidation(true);
+    const currentErrors = validate();
+    if (currentErrors.length > 0) return;
+    if (!preview) {
+      toast.warning('Сначала постройте диаграмму, потом сохраните результат');
       return;
     }
+
+    setSaving(true);
     try {
-      await saveReport(buildPayload());
-      toast.success('Отчёт сохранён');
-      navigate('/statistics');
+      const saved = await saveReport(payload());
+      setSavedReports((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      toast.success(`Отчёт ${saved.id} сохранён и появился в списке ниже`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Не удалось сохранить отчёт');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleSaveTemplate = async () => {
-    if (selectedMetrics.length === 0) {
-      setShowValidation(true);
-      toast.error('Выберите хотя бы одну метрику');
-      return;
-    }
-    await refreshPreview(false);
+  const openSavedReport = (report: SavedReport) => {
+    const config = report.config || {};
+    const nextDataset = typeof config.dataset === 'string' && availableDatasetFields[config.dataset] ? config.dataset : 'Матчи';
+    const nextFields = availableDatasetFields[nextDataset] || [];
+    const nextAxisX = typeof config.axisX === 'string' && nextFields.includes(config.axisX) ? config.axisX : nextFields[0] || '';
+    const nextAxisY = typeof config.axisY === 'string' && nextFields.includes(config.axisY) ? config.axisY : nextFields[1] || nextFields[0] || '';
+    const nextFilters = normalizeSavedFilters(config.filters, nextFields, report.id);
+
+    setReportName(typeof config.name === 'string' ? config.name : report.name);
+    setDataset(nextDataset);
+    setAxisX(nextAxisX);
+    setAxisY(nextAxisY);
+    setChartType(config.chartType === 'table' ? 'table' : 'bar');
+    setFilters(nextFilters.length > 0 ? nextFilters : [makeFilter(nextAxisY || nextAxisX)]);
+    setPreview(report.preview || null);
+    setShowValidation(false);
+    toast.info(`Открыт сохранённый отчёт ${report.id}`);
   };
-
-  const handleExportCSV = () => {
-    if (!previewData || previewData.rows.length === 0) {
-      toast.error('Сначала постройте предпросмотр');
-      return;
-    }
-    downloadTextFile(toCsv(previewData.rows, previewData.metrics), `${reportName || 'report'}.csv`, 'text/csv;charset=utf-8');
-    toast.success('CSV отчёта скачан');
-  };
-
-  const handleExportJSON = () => {
-    if (!previewData) {
-      toast.error('Сначала постройте предпросмотр');
-      return;
-    }
-    downloadTextFile(JSON.stringify(previewData, null, 2), `${reportName || 'report'}.json`, 'application/json;charset=utf-8');
-    toast.success('JSON отчёта скачан');
-  };
-
-  const handleShare = () => {
-    toast.info('Функция "Поделиться ссылкой" будет доступна позже');
-  };
-
-  const errors = showValidation ? validate() : [];
-  const hasData = selectedMetrics.length > 0;
-  const activeMetrics = previewData?.metrics ?? [];
-  const chartRows = previewData?.rows ?? [];
-  const firstMetric = activeMetrics[0];
-
-  const numericRows = useMemo(() => chartRows.map(row => ({ ...row })), [chartRows]);
 
   const renderPreview = () => {
-    if (!hasData) {
+    if (!preview) {
       return (
-        <div className="h-96 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center">
-          <div className="text-center text-gray-400">
-            <Lightbulb className="w-16 h-16 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-700 mb-2">Начните создавать отчёт</h3>
-            <div className="text-sm space-y-1 max-w-md mx-auto">
-              <p>1. Выберите источник данных слева</p>
-              <p>2. Отметьте нужные метрики</p>
-              <p>3. Настройте группировку и фильтры</p>
-              <p>4. Предпросмотр появится в этом блоке</p>
-            </div>
-          </div>
+        <div className="border border-dashed border-gray-300 rounded-lg p-12 text-center text-gray-500">
+          <Wand2 className="w-10 h-10 mx-auto mb-3 text-gray-400" />
+          <p className="font-medium text-gray-700">Настройте фильтры и оси X/Y</p>
+          <p className="text-sm mt-1">После нажатия «Построить» здесь появится диаграмма по данным из БД.</p>
         </div>
       );
     }
 
-    if (isPreviewLoading) {
-      return <div className="h-96 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500">Строю предпросмотр...</div>;
-    }
-
-    if (!previewData || chartRows.length === 0) {
-      return <div className="h-96 rounded-lg border border-gray-200 flex items-center justify-center text-gray-500">По выбранным параметрам данных нет</div>;
+    if (preview.rows.length === 0) {
+      return <div className="border border-gray-200 rounded-lg p-8 text-center text-gray-500">По текущим фильтрам нет данных для диаграммы.</div>;
     }
 
     if (chartType === 'table') {
       return (
         <div className="overflow-x-auto border border-gray-200 rounded-lg">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-gray-600">
+            <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="text-left px-4 py-3">Группа</th>
-                <th className="text-left px-4 py-3">Матчей</th>
-                {activeMetrics.map(metric => <th key={metric.key} className="text-left px-4 py-3">{metric.label}</th>)}
+                <th className="px-4 py-3 text-left font-medium text-gray-700">{preview.axisX}</th>
+                {preview.series.map((item) => (
+                  <th key={item} className="px-4 py-3 text-left font-medium text-gray-700">{item}</th>
+                ))}
+                <th className="px-4 py-3 text-left font-medium text-gray-700">Итого</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {chartRows.map(row => (
+            <tbody className="divide-y divide-gray-200">
+              {preview.rows.map((row) => (
                 <tr key={String(row.name)}>
                   <td className="px-4 py-3 font-medium text-gray-900">{row.name}</td>
-                  <td className="px-4 py-3 text-gray-600">{row.matches}</td>
-                  {activeMetrics.map(metric => <td key={metric.key} className="px-4 py-3 text-gray-600">{row[metric.key]}</td>)}
+                  {preview.series.map((item) => <td key={item} className="px-4 py-3 text-gray-700">{row[item] || 0}</td>)}
+                  <td className="px-4 py-3 text-gray-900 font-medium">{row.total || 0}</td>
                 </tr>
               ))}
             </tbody>
@@ -281,52 +244,17 @@ export function ReportBuilder() {
       );
     }
 
-    if (chartType === 'pie' && firstMetric) {
-      return (
-        <div className="h-96 rounded-lg border border-gray-200 p-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <RePieChart>
-              <Tooltip />
-              <Legend />
-              <Pie data={numericRows} dataKey={firstMetric.key} nameKey="name" outerRadius={120} label>
-                {numericRows.map((_, index) => <Cell key={index} fill={chartColors[index % chartColors.length]} />)}
-              </Pie>
-            </RePieChart>
-          </ResponsiveContainer>
-        </div>
-      );
-    }
-
-    if (chartType === 'line') {
-      return (
-        <div className="h-96 rounded-lg border border-gray-200 p-4">
-          <ResponsiveContainer width="100%" height="100%">
-            <ReLineChart data={numericRows} margin={{ top: 10, right: 30, left: 0, bottom: 40 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" angle={-20} textAnchor="end" height={70} />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              {activeMetrics.map((metric, index) => (
-                <Line key={metric.key} type="monotone" dataKey={metric.key} name={metric.label} stroke={chartColors[index % chartColors.length]} strokeWidth={2} />
-              ))}
-            </ReLineChart>
-          </ResponsiveContainer>
-        </div>
-      );
-    }
-
     return (
-      <div className="h-96 rounded-lg border border-gray-200 p-4">
+      <div className="h-[440px] rounded-lg border border-gray-200 p-4">
         <ResponsiveContainer width="100%" height="100%">
-          <ReBarChart data={numericRows} margin={{ top: 10, right: 30, left: 0, bottom: 40 }}>
+          <ReBarChart data={chartRows} margin={{ top: 10, right: 30, left: 0, bottom: 80 }}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" angle={-20} textAnchor="end" height={70} />
-            <YAxis />
+            <XAxis dataKey="name" angle={-25} textAnchor="end" height={100} interval={0} />
+            <YAxis allowDecimals={false} />
             <Tooltip />
             <Legend />
-            {activeMetrics.map((metric, index) => (
-              <Bar key={metric.key} dataKey={metric.key} name={metric.label} fill={chartColors[index % chartColors.length]} />
+            {preview.series.map((item, index) => (
+              <Bar key={item} dataKey={item} name={item} stackId="custom-report" fill={chartColors[index % chartColors.length]} />
             ))}
           </ReBarChart>
         </ResponsiveContainer>
@@ -338,214 +266,122 @@ export function ReportBuilder() {
     <div>
       <Breadcrumbs items={[
         { label: 'Статистика', href: '/statistics' },
-        { label: 'Конструктор отчёта' },
+        { label: 'Кастомный отчёт' },
       ]} />
 
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex-1 max-w-md">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Название отчёта</label>
-          <input
-            type="text"
-            value={reportName}
-            onChange={(e) => setReportName(e.target.value)}
-            className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-              showValidation && !reportName ? 'border-red-500' : 'border-gray-300'
-            }`}
-            placeholder="Например: Статистика побед за февраль"
-          />
-          {showValidation && !reportName && (
-            <p className="mt-1 text-sm text-red-600">Название обязательно</p>
-          )}
+      <div className="mb-6 flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Кастомный отчёт</h1>
+          <p className="text-gray-600 mt-1">Многокритериальный фильтр, выбор осей X/Y и построение диаграммы по данным из БД</p>
         </div>
-        <Button onClick={handleSave}>
-          <Save className="w-4 h-4" />
-          Сохранить отчёт
-        </Button>
+        <div className="flex gap-3">
+          <Button variant="secondary" onClick={buildPreview} loading={loadingPreview}>
+            <Wand2 className="w-4 h-4" />
+            Построить
+          </Button>
+          <Button onClick={handleSave} loading={saving} disabled={!preview}>
+            <Save className="w-4 h-4" />
+            Сохранить результат
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="space-y-6">
           <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-gray-900">Источник данных</h2>
-            </CardHeader>
-            <CardBody>
-              <div className="space-y-2">
-                {datasets.map(dataset => (
-                  <button
-                    key={dataset}
-                    onClick={() => setSelectedDataset(dataset)}
-                    className={`w-full px-4 py-3 rounded-lg border transition-colors text-left ${
-                      selectedDataset === dataset
-                        ? 'bg-blue-50 border-blue-300 text-blue-900'
-                        : 'bg-white border-gray-300 hover:border-gray-400'
-                    }`}
-                  >
-                    <div className="font-medium">{dataset}</div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {dataset === 'Матчи' && 'Данные о завершённых матчах'}
-                      {dataset === 'Ходы' && 'Информация о каждом ходе'}
-                      {dataset === 'Ошибки' && 'Логи ошибок и сбоев'}
-                    </div>
-                  </button>
-                ))}
+            <CardHeader><h2 className="text-lg font-semibold text-gray-900">Основные параметры</h2></CardHeader>
+            <CardBody className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Название отчёта</label>
+                <input
+                  value={reportName}
+                  onChange={(event) => setReportName(event.target.value)}
+                  className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${showValidation && !reportName.trim() ? 'border-red-500' : 'border-gray-300'}`}
+                />
               </div>
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-gray-900">Метрики</h2>
-            </CardHeader>
-            <CardBody>
-              <div className="space-y-2">
-                {metrics.map(metric => (
-                  <label key={metric} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedMetrics.includes(metric)}
-                      onChange={() => toggleMetric(metric)}
-                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                    />
-                    <span className="text-sm text-gray-900">{metric}</span>
-                  </label>
-                ))}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Источник данных</label>
+                <select value={dataset} onChange={(event) => handleDatasetChange(event.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  {Object.keys(availableDatasetFields).map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
               </div>
-              {showValidation && selectedMetrics.length === 0 && (
-                <p className="mt-2 text-sm text-red-600">Выберите хотя бы одну метрику</p>
-              )}
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-gray-900">Группировка</h2>
-            </CardHeader>
-            <CardBody>
-              <select
-                value={groupBy}
-                onChange={(e) => setGroupBy(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {groupByOptions.map(option => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Ось X</label>
+                  <select value={axisX} onChange={(event) => setAxisX(event.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {fields.map((field) => <option key={field} value={field}>{field}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Ось Y</label>
+                  <select value={axisY} onChange={(event) => setAxisY(event.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {fields.map((field) => <option key={field} value={field}>{field}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Визуализация</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setChartType('bar')} className={`px-3 py-2 rounded-lg border ${chartType === 'bar' ? 'bg-blue-50 border-blue-300 text-blue-900' : 'border-gray-300 text-gray-700'}`}>Диаграмма</button>
+                  <button type="button" onClick={() => setChartType('table')} className={`px-3 py-2 rounded-lg border ${chartType === 'table' ? 'bg-blue-50 border-blue-300 text-blue-900' : 'border-gray-300 text-gray-700'}`}>Таблица</button>
+                </div>
+              </div>
             </CardBody>
           </Card>
 
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900">Фильтры</h2>
-                <Button variant="ghost" onClick={addFilter}>
-                  <Plus className="w-4 h-4" />
-                </Button>
+                <h2 className="text-lg font-semibold text-gray-900">Многокритериальные фильтры</h2>
+                <Button variant="ghost" onClick={addFilter}><Plus className="w-4 h-4" /></Button>
               </div>
             </CardHeader>
             <CardBody>
-              {filters.length === 0 ? (
-                <div className="text-center py-6 text-gray-500 text-sm">
-                  <p>Нет фильтров</p>
-                  <p className="text-xs mt-1">Нажмите + для добавления</p>
-                </div>
-              ) : (
+              <div className="space-y-3">
+                {filters.map((filter) => (
+                  <div key={filter.id} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-medium text-gray-700">Условие фильтра</span>
+                      <button type="button" onClick={() => removeFilter(filter.id)} className="text-gray-400 hover:text-red-600"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                    <div className="space-y-2">
+                      <select value={filter.field} onChange={(event) => updateFilter(filter.id, 'field', event.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        {fields.map((field) => <option key={field} value={field}>{field}</option>)}
+                      </select>
+                      <select value={filter.operator} onChange={(event) => updateFilter(filter.id, 'operator', event.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        {operators.map((operator) => <option key={operator.value} value={operator.value}>{operator.label}</option>)}
+                      </select>
+                      <input value={filter.value} onChange={(event) => updateFilter(filter.id, 'value', event.target.value)} placeholder="Значение" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-gray-500 mt-3">Текстовые условия ищут без учёта регистра и по подстроке.</p>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader><h2 className="text-lg font-semibold text-gray-900">Сохранённые отчёты</h2></CardHeader>
+            <CardBody>
+              {loadingSaved && <p className="text-sm text-gray-500">Загрузка списка...</p>}
+              {!loadingSaved && savedReports.length === 0 && (
+                <p className="text-sm text-gray-500">Пока ничего не сохранено. Постройте диаграмму и нажмите «Сохранить результат».</p>
+              )}
+              {!loadingSaved && savedReports.length > 0 && (
                 <div className="space-y-3">
-                  {filters.map(filter => (
-                    <div key={filter.id} className="p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-gray-700">Фильтр</span>
-                        <button onClick={() => removeFilter(filter.id)} className="text-gray-400 hover:text-red-600">
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="space-y-2">
-                        <select value={filter.field} onChange={(e) => updateFilter(filter.id, 'field', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                          <option>Статус</option>
-                          <option>Бот</option>
-                          <option>Правила</option>
-                          <option>Дата</option>
-                        </select>
-                        <select value={filter.operator} onChange={(e) => updateFilter(filter.id, 'operator', e.target.value)} className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                          <option value="=">=</option>
-                          <option value="!=">≠</option>
-                          <option value=">">{'>'}</option>
-                          <option value="<">{'<'}</option>
-                          <option value="contains">содержит</option>
-                        </select>
-                        <input type="text" value={filter.value} onChange={(e) => updateFilter(filter.id, 'value', e.target.value)} placeholder="Значение" className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  {savedReports.slice(0, 6).map((report) => (
+                    <div key={report.id} className="rounded-lg border border-gray-200 p-3 bg-gray-50">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{report.name}</p>
+                          <p className="text-xs text-gray-500 mt-1">{report.id} • {report.createdAtLabel || report.created_at || 'дата не указана'}</p>
+                        </div>
+                        <Button variant="ghost" onClick={() => openSavedReport(report)} className="text-sm px-2 py-1">Открыть</Button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-            </CardBody>
-          </Card>
-        </div>
-
-        <div className="lg:col-span-2 space-y-6">
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-semibold text-gray-900">Тип визуализации</h2>
-            </CardHeader>
-            <CardBody>
-              <div className="grid grid-cols-4 gap-3">
-                {chartTypes.map(type => {
-                  const Icon = type.icon;
-                  return (
-                    <button
-                      key={type.id}
-                      onClick={() => setChartType(type.id)}
-                      className={`p-4 rounded-lg border transition-colors ${
-                        chartType === type.id
-                          ? 'bg-blue-50 border-blue-300'
-                          : 'bg-white border-gray-300 hover:border-gray-400'
-                      }`}
-                    >
-                      <Icon className={`w-6 h-6 mx-auto mb-2 ${chartType === type.id ? 'text-blue-600' : 'text-gray-400'}`} />
-                      <p className={`text-sm ${chartType === type.id ? 'text-blue-900 font-medium' : 'text-gray-700'}`}>{type.name}</p>
-                    </button>
-                  );
-                })}
-              </div>
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-900">Предпросмотр</h2>
-                {previewData && <Badge variant="info">{chartRows.length} строк</Badge>}
-              </div>
-            </CardHeader>
-            <CardBody>
-              <div className="space-y-4">
-                {hasData && (
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-medium text-gray-900">{reportName || 'Без названия'}</h3>
-                      <p className="text-sm text-gray-600">Источник: {selectedDataset} • Группировка: {groupBy}</p>
-                    </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      {selectedMetrics.map(metric => <Badge key={metric} variant="info">{metric}</Badge>)}
-                    </div>
-                  </div>
-                )}
-
-                {renderPreview()}
-
-                {activeMetrics.length > 0 && (
-                  <div className="flex items-center gap-4 text-sm flex-wrap">
-                    <span className="text-gray-700 font-medium">Легенда:</span>
-                    {activeMetrics.map((metric, idx) => (
-                      <div key={metric.key} className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded" style={{ backgroundColor: chartColors[idx % chartColors.length] }} />
-                        <span className="text-gray-600">{metric.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </CardBody>
           </Card>
 
@@ -555,49 +391,51 @@ export function ReportBuilder() {
                 <div className="flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="font-medium text-red-900 mb-1">Необходимо исправить:</p>
+                    <p className="font-medium text-red-900 mb-1">Нужно исправить:</p>
                     <ul className="list-disc list-inside text-sm text-red-800 space-y-1">
-                      {errors.map((error, idx) => <li key={idx}>{error}</li>)}
+                      {errors.map((error) => <li key={error}>{error}</li>)}
                     </ul>
                   </div>
                 </div>
               </CardBody>
             </Card>
           )}
+        </div>
 
-          {hasData && errors.length === 0 && previewData && (
-            <Card className="bg-green-50 border-green-200">
-              <CardBody>
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                  <div className="text-sm text-green-900">
-                    <p className="font-medium mb-1">Предпросмотр отчёта готов</p>
-                    <p className="text-green-800">Можно сохранить отчёт или экспортировать рассчитанные строки.</p>
+        <div className="lg:col-span-2 space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">Предпросмотр диаграммы</h2>
+                  <p className="text-sm text-gray-500">X: {axisX} • Y: {axisY}</p>
+                </div>
+                {preview && (
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="info">{preview.totalRecords} записей</Badge>
+                    <Badge variant="default">{preview.dataset}</Badge>
                   </div>
+                )}
+              </div>
+            </CardHeader>
+            <CardBody>
+              <div className="mb-4 rounded-lg bg-blue-50 border border-blue-100 p-4 text-sm text-blue-900">
+                Диаграмма считает количество записей для каждой пары значений: выбранный атрибут по оси X и выбранный атрибут по оси Y.
+              </div>
+              {renderPreview()}
+            </CardBody>
+          </Card>
+
+          {hasData && (
+            <Card>
+              <CardHeader><h2 className="text-lg font-semibold text-gray-900">Расшифровка</h2></CardHeader>
+              <CardBody>
+                <div className="flex flex-wrap gap-2">
+                  {preview?.series.map((item) => <Badge key={item} variant="default">{item}</Badge>)}
                 </div>
               </CardBody>
             </Card>
           )}
-
-          <div className="flex items-center justify-between gap-3">
-            <Button variant="secondary" onClick={handleSaveTemplate} loading={isPreviewLoading}>
-              Обновить предпросмотр
-            </Button>
-            <div className="flex gap-3 flex-wrap justify-end">
-              <Button variant="secondary" onClick={handleExportCSV}>
-                <Download className="w-4 h-4" />
-                Экспорт CSV
-              </Button>
-              <Button variant="secondary" onClick={handleExportJSON}>
-                <Download className="w-4 h-4" />
-                Экспорт JSON
-              </Button>
-              <Button variant="ghost" onClick={handleShare}>
-                <Share2 className="w-4 h-4" />
-                Поделиться ссылкой
-              </Button>
-            </div>
-          </div>
         </div>
       </div>
     </div>

@@ -16,10 +16,22 @@ export interface UserRecord {
   updatedAt?: string;
 }
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
 export interface UsersPayload {
   users: UserRecord[];
   roleCounts: Record<UserRole, number>;
   roles: UserRole[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
 }
 
 export interface BotRecord {
@@ -211,7 +223,7 @@ export function getOverview() {
 }
 
 export function getBots(filters: Record<string, string | undefined> = {}) {
-  return request<BotRecord[]>(`/bots${query(filters)}`);
+  return request<PaginatedResponse<BotRecord>>(`/bots${query(filters)}`);
 }
 
 export function getBot(id: string) {
@@ -242,7 +254,7 @@ export async function downloadLogSource(id: string, fallbackName = `${id}.log`) 
 }
 
 export function getMatches(filters: Record<string, string | undefined> = {}) {
-  return request<MatchRecord[]>(`/matches${query(filters)}`);
+  return request<PaginatedResponse<MatchRecord>>(`/matches${query(filters)}`);
 }
 
 export function getMatch(id: string) {
@@ -257,7 +269,7 @@ export function updateMatch(id: string, payload: Record<string, unknown>) {
 }
 
 export function getLogs(filters: Record<string, string | undefined> = {}) {
-  return request<LogRecord[]>(`/logs${query(filters)}`);
+  return request<PaginatedResponse<LogRecord>>(`/logs${query(filters)}`);
 }
 
 export function getLog(id: string) {
@@ -324,6 +336,38 @@ export interface ImportExportHistoryItem {
   rows?: number;
   recordsCount?: number;
   fileName?: string;
+}
+
+
+export interface ReportFilterConfig {
+  id: string;
+  field: string;
+  operator: string;
+  value: string;
+}
+
+export interface CustomReportPayload {
+  config: Record<string, unknown>;
+  dataset: string;
+  axisX: string;
+  axisY: string;
+  chartType: string;
+  fields: Record<string, string[]>;
+  series: string[];
+  rows: Array<Record<string, string | number>>;
+  totalRecords: number;
+  generatedAt: string;
+  summary?: StatisticsSummary;
+}
+
+export interface SavedReport {
+  id: string;
+  name: string;
+  config: Record<string, unknown>;
+  preview?: CustomReportPayload;
+  created_by?: string;
+  created_at?: string;
+  createdAtLabel?: string;
 }
 
 export interface DownloadResult {
@@ -459,17 +503,21 @@ export function exportData(payload: Record<string, unknown>) {
 }
 
 export function previewReport(payload: Record<string, unknown>) {
-  return request<Record<string, unknown>>('/reports/preview', {
+  return request<CustomReportPayload>('/reports/preview', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
 export function saveReport(payload: Record<string, unknown>) {
-  return request<Record<string, unknown>>('/reports', {
+  return request<SavedReport>('/reports', {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function getSavedReports() {
+  return request<SavedReport[]>('/reports');
 }
 
 export interface ClusterPoint {

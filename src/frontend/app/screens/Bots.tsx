@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Search, X, Eye, Play, Download } from 'lucide-react';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -20,33 +20,75 @@ const emptyFilters = {
   owner_login: '',
 };
 
+function filtersFromParams(params: URLSearchParams) {
+  return {
+    ...emptyFilters,
+    id: params.get('id') || '',
+    name: params.get('name') || '',
+    language: params.get('language') || '',
+    version: params.get('version') || '',
+    status: params.get('status') || '',
+    tag: params.get('tag') || '',
+    owner_login: params.get('owner_login') || '',
+  };
+}
+
+function filtersToParams(filters: typeof emptyFilters, page = 1, pageSize = 10) {
+  const nextParams = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value.trim()) nextParams.set(key, value.trim());
+  });
+  if (page > 1) nextParams.set('page', String(page));
+  if (pageSize !== 10) nextParams.set('page_size', String(pageSize));
+  return nextParams;
+}
+
 export function Bots() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const [bots, setBots] = useState<BotRecord[]>([]);
-  const [filters, setFilters] = useState(emptyFilters);
+  const [filters, setFilters] = useState(() => filtersFromParams(params));
+  const [page, setPage] = useState(Number(params.get('page') || 1));
+  const [pageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const canUpload = canManageBots(getCurrentUser());
 
-  const loadBots = () => {
+  const loadBots = (nextPage = 1) => {
+    setPage(nextPage);
+    setParams(filtersToParams(filters, nextPage, pageSize));
     setLoading(true);
     setError('');
-    getBots(filters)
-      .then(setBots)
+    getBots({ ...filters, page: String(nextPage), page_size: String(pageSize) })
+      .then((payload) => {
+        setBots(payload.items);
+        setPage(payload.page);
+        setTotal(payload.total);
+        setTotalPages(payload.totalPages);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    loadBots();
+    loadBots(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearFilters = () => {
     setFilters(emptyFilters);
+    setParams({});
     setLoading(true);
-    getBots({})
-      .then(setBots)
+    setPage(1);
+    getBots({ page: '1', page_size: String(pageSize) })
+      .then((payload) => {
+        setBots(payload.items);
+        setPage(payload.page);
+        setTotal(payload.total);
+        setTotalPages(payload.totalPages);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   };
@@ -146,7 +188,7 @@ export function Bots() {
             <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Тег" value={filters.tag} onChange={(e) => setFilters({ ...filters, tag: e.target.value })} />
             <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Владелец" value={filters.owner_login} onChange={(e) => setFilters({ ...filters, owner_login: e.target.value })} />
             <div className="flex gap-2">
-              <Button variant="primary" onClick={loadBots} className="flex-1">Применить</Button>
+              <Button variant="primary" onClick={() => loadBots(1)} className="flex-1">Применить</Button>
               <Button variant="secondary" onClick={clearFilters}>
                 <X className="w-4 h-4" />
               </Button>
@@ -157,7 +199,15 @@ export function Bots() {
       </Card>
 
       {error && <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
-      {loading ? <LoadingSpinner /> : <Table columns={columns} data={bots} emptyMessage="Боты по заданным фильтрам не найдены" onRowClick={(row) => navigate(`/bots/${row.id}`)} />}
+      {loading ? <LoadingSpinner /> : (
+        <Table
+          columns={columns}
+          data={bots}
+          emptyMessage="Боты по заданным фильтрам не найдены"
+          onRowClick={(row) => navigate(`/bots/${row.id}`)}
+          pagination={{ page, pageSize, total, totalPages, onPageChange: loadBots }}
+        />
+      )}
     </div>
   );
 }

@@ -9,7 +9,6 @@ import {
   ArrowRightLeft,
   Settings,
   Search,
-  Network,
 } from 'lucide-react';
 import type { UserRole } from '../api/client';
 import { getCurrentUser } from '../api/client';
@@ -21,7 +20,7 @@ const navItems: Array<{ to: string; label: string; icon: ComponentType<{ classNa
   { to: '/matches', label: 'Матчи', icon: Swords },
   { to: '/logs', label: 'Логи', icon: FileText, roles: ['moderator', 'admin'] },
   { to: '/statistics', label: 'Статистика', icon: BarChart3 },
-  { to: '/analytics', label: 'Анализ', icon: Network, roles: ['moderator', 'admin'] },
+  { to: '/statistics/custom', label: 'Кастомный отчёт', icon: BarChart3 },
   { to: '/import-export', label: 'Импорт/Экспорт', icon: ArrowRightLeft, roles: ['moderator', 'admin'] },
   { to: '/search', label: 'Поиск', icon: Search },
   { to: '/settings', label: 'Настройки', icon: Settings, roles: ['moderator', 'admin'] },

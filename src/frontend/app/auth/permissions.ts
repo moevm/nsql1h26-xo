@@ -8,7 +8,7 @@ export const roleLabels: Record<UserRole, string> = {
 };
 
 export const roleDescriptions: Record<UserRole, string> = {
-  user: 'Просмотр ботов, карточек, матчей, статистики и создание матчей.',
+  user: 'Просмотр ботов, карточек, матчей, статистики, создание матчей и кастомных отчётов.',
   moderator: 'Загрузка и редактирование ботов, работа с логами, импорт/экспорт, отчёты и аналитика.',
   admin: 'Полный доступ, настройки приложения и управление ролями пользователей.',
 };
@@ -30,7 +30,7 @@ export function canViewLogs(user: AuthUser | null = getCurrentUser()) {
 }
 
 export function canUseAnalysisTools(user: AuthUser | null = getCurrentUser()) {
-  return hasRole(user, ['moderator', 'admin']);
+  return hasRole(user, ['user', 'moderator', 'admin']);
 }
 
 export function canImportExport(user: AuthUser | null = getCurrentUser()) {

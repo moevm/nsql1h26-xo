@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Download, Eye, Search, X } from 'lucide-react';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -10,32 +10,74 @@ import { LogRecord, downloadLogSource, getLogs } from '../api/client';
 
 const emptyFilters = { id: '', type: '', level: '', match_id: '', query: '', date_from: '', date_to: '' };
 
+function filtersFromParams(params: URLSearchParams) {
+  return {
+    ...emptyFilters,
+    id: params.get('id') || '',
+    type: params.get('type') || '',
+    level: params.get('level') || '',
+    match_id: params.get('match_id') || '',
+    query: params.get('query') || '',
+    date_from: params.get('date_from') || '',
+    date_to: params.get('date_to') || '',
+  };
+}
+
+function filtersToParams(filters: typeof emptyFilters, page = 1, pageSize = 10) {
+  const nextParams = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value.trim()) nextParams.set(key, value.trim());
+  });
+  if (page > 1) nextParams.set('page', String(page));
+  if (pageSize !== 10) nextParams.set('page_size', String(pageSize));
+  return nextParams;
+}
+
 export function Logs() {
   const navigate = useNavigate();
-  const [filters, setFilters] = useState(emptyFilters);
+  const [params, setParams] = useSearchParams();
+  const [filters, setFilters] = useState(() => filtersFromParams(params));
   const [logs, setLogs] = useState<LogRecord[]>([]);
+  const [page, setPage] = useState(Number(params.get('page') || 1));
+  const [pageSize] = useState(10);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const loadLogs = () => {
+  const loadLogs = (nextPage = 1) => {
+    setPage(nextPage);
+    setParams(filtersToParams(filters, nextPage, pageSize));
     setLoading(true);
     setError('');
-    getLogs(filters)
-      .then(setLogs)
+    getLogs({ ...filters, page: String(nextPage), page_size: String(pageSize) })
+      .then((payload) => {
+        setLogs(payload.items);
+        setPage(payload.page);
+        setTotal(payload.total);
+        setTotalPages(payload.totalPages);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    loadLogs();
+    loadLogs(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearFilters = () => {
     setFilters(emptyFilters);
+    setParams({});
     setLoading(true);
-    getLogs({})
-      .then(setLogs)
+    setPage(1);
+    getLogs({ page: '1', page_size: String(pageSize) })
+      .then((payload) => {
+        setLogs(payload.items);
+        setPage(payload.page);
+        setTotal(payload.total);
+        setTotalPages(payload.totalPages);
+      })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
   };
@@ -89,10 +131,6 @@ export function Logs() {
           <h1 className="text-3xl font-bold text-gray-900">Логи</h1>
           <p className="text-gray-600 mt-1">Просмотр логов матчей, ботов и системы</p>
         </div>
-        <Button variant="secondary">
-          <Download className="w-4 h-4" />
-          Экспорт логов
-        </Button>
       </div>
 
       <Card className="mb-6">
@@ -110,7 +148,7 @@ export function Logs() {
             <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" type="date" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} />
             <input className="px-4 py-2.5 bg-input-background rounded-lg border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500" type="date" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} />
             <div className="flex gap-2">
-              <Button variant="primary" onClick={loadLogs} className="flex-1">Применить</Button>
+              <Button variant="primary" onClick={() => loadLogs(1)} className="flex-1">Применить</Button>
               <Button variant="secondary" onClick={clearFilters}><X className="w-4 h-4" /></Button>
             </div>
           </div>
@@ -118,7 +156,15 @@ export function Logs() {
       </Card>
 
       {error && <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">{error}</div>}
-      {loading ? <LoadingSpinner /> : <Table columns={columns} data={logs} emptyMessage="По заданным фильтрам логов нет" onRowClick={(row) => navigate(`/logs/${row.id}`)} />}
+      {loading ? <LoadingSpinner /> : (
+        <Table
+          columns={columns}
+          data={logs}
+          emptyMessage="По заданным фильтрам логов нет"
+          onRowClick={(row) => navigate(`/logs/${row.id}`)}
+          pagination={{ page, pageSize, total, totalPages, onPageChange: loadLogs }}
+        />
+      )}
     </div>
   );
 }

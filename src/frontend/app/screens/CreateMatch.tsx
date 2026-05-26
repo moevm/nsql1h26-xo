@@ -40,8 +40,8 @@ export function CreateMatch() {
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
-    getBots()
-      .then((data) => setBots(data.map((bot) => ({ ...bot, compatible: bot.status === 'active' }))))
+    getBots({ page: '1', page_size: '100' })
+      .then((data) => setBots(data.items.map((bot) => ({ ...bot, compatible: bot.status === 'active' }))))
       .catch((err) => toast.error(err instanceof Error ? err.message : 'Не удалось загрузить ботов'))
       .finally(() => setLoadingBots(false));
   }, []);

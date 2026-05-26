@@ -22,14 +22,14 @@ export function BotDetail() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([getBot(id), getMatches({ bot: id })])
+    Promise.all([getBot(id), getMatches({ bot: id, page: '1', page_size: '100' })])
       .then(([botData, matchData]) => {
         setBot(botData);
         setRunSettings({
           maxMoves: String(botData.runSettings?.maxMoves || 225),
           moveTimeoutMs: String(botData.runSettings?.moveTimeoutMs || 1000),
         });
-        setMatches(matchData);
+        setMatches(matchData.items);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));

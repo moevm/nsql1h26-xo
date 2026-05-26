@@ -38,6 +38,10 @@ export function Settings() {
   const [userQuery, setUserQuery] = useState('');
   const [userRoleFilter, setUserRoleFilter] = useState('');
   const [usersLoading, setUsersLoading] = useState(false);
+  const [usersPage, setUsersPage] = useState(1);
+  const [usersPageSize] = useState(10);
+  const [usersTotal, setUsersTotal] = useState(0);
+  const [usersTotalPages, setUsersTotalPages] = useState(1);
   const [roleUpdatingId, setRoleUpdatingId] = useState('');
   const [showClearLogsModal, setShowClearLogsModal] = useState(false);
   const [showArchiveBotsModal, setShowArchiveBotsModal] = useState(false);
@@ -46,13 +50,16 @@ export function Settings() {
   const currentUser = getCurrentUser();
   const isAdmin = currentUser?.role === 'admin';
 
-  const loadUsers = () => {
+  const loadUsers = (nextPage = usersPage) => {
     if (!isAdmin) return;
+    setUsersPage(nextPage);
     setUsersLoading(true);
-    getUsers({ q: userQuery, role: userRoleFilter })
+    getUsers({ q: userQuery, role: userRoleFilter, page: String(nextPage), page_size: String(usersPageSize) })
       .then((payload) => {
         setUsers(payload.users);
         setRoleCounts({ user: payload.roleCounts.user || 0, moderator: payload.roleCounts.moderator || 0, admin: payload.roleCounts.admin || 0 });
+        setUsersTotal(payload.total);
+        setUsersTotalPages(payload.totalPages);
       })
       .catch((err) => toast.error(err instanceof Error ? err.message : 'Не удалось загрузить пользователей'))
       .finally(() => setUsersLoading(false));
@@ -113,7 +120,7 @@ export function Settings() {
       const updated = await updateUserRole(user.id, role);
       setUsers((items) => items.map((item) => item.id === updated.id ? updated : item));
       toast.success(`Роль пользователя ${updated.email} изменена на ${roleLabels[updated.role]}`);
-      loadUsers();
+      loadUsers(usersPage);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Не удалось изменить роль');
     } finally {
@@ -188,7 +195,7 @@ export function Settings() {
                   <option value="">Все роли</option>
                   {roleOptions.map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}
                 </select>
-                <Button variant="secondary" onClick={loadUsers}>Обновить</Button>
+                <Button variant="secondary" onClick={() => loadUsers(1)}>Обновить</Button>
               </div>
 
               <div className="overflow-x-auto border border-gray-200 rounded-lg">
@@ -230,6 +237,18 @@ export function Settings() {
                   </tbody>
                 </table>
               </div>
+              {usersTotalPages > 1 && (
+                <div className="mt-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-sm">
+                  <span className="text-gray-600">
+                    Показано {users.length} из {usersTotal} пользователей
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button variant="secondary" onClick={() => loadUsers(usersPage - 1)} disabled={usersPage <= 1}>Назад</Button>
+                    <span className="text-gray-700">Страница {usersPage} из {usersTotalPages}</span>
+                    <Button variant="secondary" onClick={() => loadUsers(usersPage + 1)} disabled={usersPage >= usersTotalPages}>Вперёд</Button>
+                  </div>
+                </div>
+              )}
             </CardBody>
           </Card>
         )}

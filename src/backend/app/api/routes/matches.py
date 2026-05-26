@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import current_user, require_moderator_or_admin
+from app.api.pagination import paginate_list
 from app.core.utils import contains, now_iso
 from app.db.connection import get_db
 from app.services.matches import describe_rules, match_to_api
@@ -43,8 +44,10 @@ def matches(
     status: str | None = None,
     result: str | None = None,
     rules: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
     _: dict[str, Any] = Depends(current_user),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     db = get_db()
     data = []
 
@@ -69,7 +72,7 @@ def matches(
 
         data.append(api)
 
-    return data
+    return paginate_list(data, page=page, page_size=page_size)
 
 
 @router.post("")

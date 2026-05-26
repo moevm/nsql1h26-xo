@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import current_user, require_moderator_or_admin
+from app.api.pagination import paginate_list
 from app.core.utils import contains, now_iso
 from app.core.upload_limits import MAX_BOT_UPLOAD_BYTES, read_upload_limited
 from app.db.connection import get_db
@@ -37,8 +38,10 @@ def bots(
     status: str | None = None,
     tag: str | None = None,
     owner_login: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
     _: dict[str, Any] = Depends(current_user),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     db = get_db()
     result = []
 
@@ -60,7 +63,7 @@ def bots(
 
         result.append(bot_to_api(bot))
 
-    return result
+    return paginate_list(result, page=page, page_size=page_size)
 
 
 @router.post("")

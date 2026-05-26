@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from fastapi.responses import PlainTextResponse
 
 from app.api.dependencies import current_user, require_moderator_or_admin
+from app.api.pagination import paginate_list
 from app.core.utils import contains
 from app.db.connection import get_db
 from app.services.logs import get_log_by_id, grouped_logs
@@ -29,8 +30,10 @@ def logs(
     query: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
     _: dict[str, Any] = Depends(require_moderator_or_admin),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
     result = []
 
     for log in grouped_logs():
@@ -56,7 +59,7 @@ def logs(
         }
         result.append(short)
 
-    return result
+    return paginate_list(result, page=page, page_size=page_size)
 
 
 @router.get("/{log_id}")

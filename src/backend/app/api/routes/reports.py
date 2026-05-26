@@ -6,196 +6,244 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from app.api.dependencies import require_moderator_or_admin
-from app.core.utils import contains, now_iso
-from app.db.connection import get_db
+from app.api.dependencies import current_user
 from app.api.routes.statistics import statistics as build_statistics
+from app.core.utils import contains, fmt, now_iso
+from app.db.connection import get_db
+from app.services.logs import grouped_logs
+from app.services.matches import describe_rules
 
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+class ReportFilter(BaseModel):
+    id: str
+    field: str
+    operator: str = "contains"
+    value: str = ""
 
 
 class ReportConfig(BaseModel):
     name: str = Field(default="Кастомный отчёт", max_length=120)
     dataset: str = "Матчи"
-    metrics: list[str] = Field(default_factory=list)
-    groupBy: str = "Нет группировки"
+    axisX: str = "Правила"
+    axisY: str = "Статус"
     chartType: str = "bar"
-    filters: list[dict[str, str]] = Field(default_factory=list)
+    filters: list[ReportFilter] = Field(default_factory=list)
 
 
-METRIC_MAP = {
-    "Винрейт": "winrate",
-    "Среднее ходов": "averageMoves",
-    "Длительность": "durationSeconds",
-    "Количество ошибок": "errorCount",
-}
-
-METRIC_LABELS = {
-    "winrate": "Винрейт, %",
-    "averageMoves": "Среднее ходов",
-    "durationSeconds": "Длительность, сек",
-    "errorCount": "Количество ошибок",
+DATASET_FIELDS: dict[str, list[str]] = {
+    "Матчи": ["Дата", "Статус", "Результат", "Правила", "Бот A", "Бот B", "Победитель", "Ходы", "Длительность, сек"],
+    "Боты": ["Название", "Язык", "Версия", "Статус", "Видимость", "Владелец", "ELO", "Матчи", "Победы", "Поражения"],
+    "Логи": ["Дата", "Тип", "Уровень", "Матч", "Размер"],
 }
 
 
-def _as_metric_key(metric: str) -> str:
-    return METRIC_MAP.get(metric, metric)
+def _ensure_dataset_access(dataset: str, user: dict[str, Any]) -> None:
+    if dataset == "Логи" and user.get("role") not in {"moderator", "admin"}:
+        raise HTTPException(status_code=403, detail="Статистика по логам доступна только модератору или администратору")
 
 
-def _matches_filter(match: dict[str, Any], filters: list[dict[str, str]], bot_names: dict[str, str]) -> bool:
-    for raw in filters:
-        value = str(raw.get("value") or "").strip()
-        if not value:
-            continue
-
-        field = raw.get("field", "")
-        operator = raw.get("operator", "=")
-
-        if field == "Статус":
-            actual = str(match.get("status") or "")
-        elif field == "Бот":
-            actual = " ".join([
-                str(match.get("bot_a_id") or ""),
-                str(match.get("bot_b_id") or ""),
-                bot_names.get(str(match.get("bot_a_id")), ""),
-                bot_names.get(str(match.get("bot_b_id")), ""),
-            ])
-        elif field == "Правила":
-            actual = str(match.get("rules") or "")
-        elif field == "Дата":
-            actual = str(match.get("started_at") or "")[:10]
-        else:
-            actual = ""
-
-        if operator == "=" and actual.lower() != value.lower():
-            return False
-        if operator == "!=" and actual.lower() == value.lower():
-            return False
-        if operator == "contains" and not contains(actual, value):
-            return False
-        if operator in {">", "<"}:
-            try:
-                left = float(actual)
-                right = float(value)
-            except ValueError:
-                continue
-            if operator == ">" and not left > right:
-                return False
-            if operator == "<" and not left < right:
-                return False
-    return True
+def _bucket_number(value: Any, step: int = 10) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return "Без значения"
+    if number <= 0:
+        return "0"
+    left = int(number // step * step)
+    right = left + step - 1
+    return f"{left}-{right}"
 
 
-def _group_key(match: dict[str, Any], group_by: str, bot_names: dict[str, str]) -> str:
-    if group_by == "Дата":
-        return str(match.get("started_at") or "")[:10] or "Без даты"
-    if group_by == "Правила":
-        return str(match.get("rules") or "Без правил")
-    if group_by == "Бот":
-        return bot_names.get(str(match.get("bot_a_id")), str(match.get("bot_a_id") or "Бот"))
-    return "Все данные"
-
-
-def _build_rows(config: ReportConfig) -> list[dict[str, Any]]:
+def _bot_names() -> dict[str, str]:
     db = get_db()
-    bots = list(db.bots.find({}, {"_id": 0}))
-    bot_names = {str(bot.get("id")): str(bot.get("name")) for bot in bots}
-    matches = [
-        match
-        for match in db.matches.find({}, {"_id": 0}).sort("started_at", 1)
-        if _matches_filter(match, config.filters, bot_names)
-    ]
+    return {str(bot.get("id")): str(bot.get("name") or bot.get("id")) for bot in db.bots.find({}, {"_id": 0})}
 
-    error_events = list(db.match_events.find({"kind": "log", "payload.level": "ERROR"}, {"_id": 0}))
-    errors_by_match: dict[str, int] = defaultdict(int)
-    errors_by_bot: dict[str, int] = defaultdict(int)
-    for event in error_events:
-        errors_by_match[str(event.get("match_id"))] += 1
-        errors_by_bot[str(event.get("bot_id"))] += 1
 
-    groups: dict[str, dict[str, Any]] = defaultdict(lambda: {
-        "matches": 0,
-        "wins": 0,
-        "moves": 0,
-        "duration": 0,
-        "errors": 0,
-    })
-
-    if config.groupBy == "Бот":
-        for bot in bots:
-            bot_id = str(bot.get("id"))
-            group = bot_names.get(bot_id, bot_id)
-            related = [m for m in matches if m.get("bot_a_id") == bot_id or m.get("bot_b_id") == bot_id]
-            for match in related:
-                groups[group]["matches"] += 1
-                groups[group]["moves"] += int(match.get("moves_count") or 0)
-                groups[group]["duration"] += int(match.get("duration_ms") or 0)
-                groups[group]["errors"] += errors_by_match.get(str(match.get("id")), 0)
-                if match.get("winner_bot_id") == bot_id:
-                    groups[group]["wins"] += 1
-            groups[group]["errors"] += errors_by_bot.get(bot_id, 0)
-    else:
-        for match in matches:
-            group = _group_key(match, config.groupBy, bot_names)
-            groups[group]["matches"] += 1
-            groups[group]["moves"] += int(match.get("moves_count") or 0)
-            groups[group]["duration"] += int(match.get("duration_ms") or 0)
-            groups[group]["errors"] += errors_by_match.get(str(match.get("id")), 0)
-            if match.get("winner_bot_id"):
-                groups[group]["wins"] += 1
-
+def _match_rows() -> list[dict[str, Any]]:
+    db = get_db()
+    names = _bot_names()
     rows: list[dict[str, Any]] = []
-    for name, data in groups.items():
-        total = max(int(data["matches"]), 1)
+
+    for match in db.matches.find({}, {"_id": 0}).sort("started_at", 1):
+        duration_seconds = round(int(match.get("duration_ms") or 0) / 1000, 1)
+        bot_a_id = str(match.get("bot_a_id") or "")
+        bot_b_id = str(match.get("bot_b_id") or "")
+        winner_id = str(match.get("winner_bot_id") or "")
         rows.append({
-            "name": name,
-            "matches": int(data["matches"]),
-            "winrate": round(int(data["wins"]) / total * 100, 1),
-            "averageMoves": round(int(data["moves"]) / total, 1),
-            "durationSeconds": round(int(data["duration"]) / total / 1000, 1),
-            "errorCount": int(data["errors"]),
+            "Дата": str(match.get("started_at") or "")[:10] or "Без даты",
+            "Статус": str(match.get("status") or "Без статуса"),
+            "Результат": str(match.get("result") or "Без результата"),
+            "Правила": describe_rules(match),
+            "Бот A": names.get(bot_a_id, bot_a_id or "Без бота"),
+            "Бот B": names.get(bot_b_id, bot_b_id or "Без бота"),
+            "Победитель": names.get(winner_id, winner_id or "Нет победителя"),
+            "Ходы": _bucket_number(match.get("moves_count"), 10),
+            "Длительность, сек": _bucket_number(duration_seconds, 5),
+            "_search": " ".join([
+                str(match.get("id") or ""),
+                str(match.get("status") or ""),
+                str(match.get("result") or ""),
+                describe_rules(match),
+                names.get(bot_a_id, bot_a_id),
+                names.get(bot_b_id, bot_b_id),
+                names.get(winner_id, winner_id),
+            ]),
         })
+    return rows
 
-    if not rows:
-        return []
 
-    metric_keys = [_as_metric_key(metric) for metric in config.metrics]
-    sort_key = metric_keys[0] if metric_keys else "matches"
-    rows.sort(key=lambda row: float(row.get(sort_key) or 0), reverse=True)
-    return rows[:20]
+def _bot_rows() -> list[dict[str, Any]]:
+    db = get_db()
+    stats_by_bot = {item.get("bot_id"): item for item in db.bot_stats.find({}, {"_id": 0})}
+    rows: list[dict[str, Any]] = []
+
+    for bot in db.bots.find({}, {"_id": 0}).sort("updated_at", -1):
+        stats = stats_by_bot.get(bot.get("id"), {})
+        rows.append({
+            "Название": str(bot.get("name") or bot.get("id")),
+            "Язык": str(bot.get("language") or "Python"),
+            "Версия": str(bot.get("version") or "Без версии"),
+            "Статус": str(bot.get("status") or "Без статуса"),
+            "Видимость": str(bot.get("visibility") or "public"),
+            "Владелец": str(bot.get("owner_login") or bot.get("uploaded_by") or "Без владельца"),
+            "ELO": _bucket_number(stats.get("elo"), 100),
+            "Матчи": _bucket_number(stats.get("total_matches"), 5),
+            "Победы": _bucket_number(stats.get("wins"), 5),
+            "Поражения": _bucket_number(stats.get("losses"), 5),
+            "_search": " ".join(str(bot.get(key, "")) for key in ["id", "name", "language", "version", "status", "owner_login"]),
+        })
+    return rows
+
+
+def _log_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for log in grouped_logs():
+        rows.append({
+            "Дата": str(log.get("rawStart") or "")[:10] or str(log.get("startTime") or "Без даты"),
+            "Тип": str(log.get("type") or "Без типа"),
+            "Уровень": str(log.get("level") or "INFO"),
+            "Матч": str(log.get("relatedMatch") or "-"),
+            "Размер": str(log.get("size") or "0 KB"),
+            "_search": " ".join(str(log.get(key, "")) for key in ["id", "type", "level", "relatedMatch", "content"]),
+        })
+    return rows
+
+
+def _rows_for_dataset(dataset: str) -> list[dict[str, Any]]:
+    if dataset == "Матчи":
+        return _match_rows()
+    if dataset == "Боты":
+        return _bot_rows()
+    if dataset == "Логи":
+        return _log_rows()
+    raise HTTPException(status_code=400, detail="Неизвестный источник данных")
+
+
+def _compare(actual: str, operator: str, expected: str) -> bool:
+    if operator == "=":
+        return actual.lower() == expected.lower()
+    if operator == "!=":
+        return actual.lower() != expected.lower()
+    if operator == "contains":
+        return contains(actual, expected)
+    if operator in {">", "<", ">=", "<="}:
+        try:
+            left = float(actual.replace(",", "."))
+            right = float(expected.replace(",", "."))
+        except ValueError:
+            left_text = actual.lower()
+            right_text = expected.lower()
+            if operator == ">":
+                return left_text > right_text
+            if operator == "<":
+                return left_text < right_text
+            if operator == ">=":
+                return left_text >= right_text
+            return left_text <= right_text
+        if operator == ">":
+            return left > right
+        if operator == "<":
+            return left < right
+        if operator == ">=":
+            return left >= right
+        return left <= right
+    return contains(actual, expected)
+
+
+def _apply_filters(rows: list[dict[str, Any]], filters: list[ReportFilter]) -> list[dict[str, Any]]:
+    result = rows
+    for filter_item in filters:
+        expected = filter_item.value.strip()
+        if not expected:
+            continue
+        field = filter_item.field
+        operator = filter_item.operator
+        result = [
+            row
+            for row in result
+            if _compare(str(row.get(field) if field in row else row.get("_search", "")), operator, expected)
+        ]
+    return result
 
 
 def _build_preview(config: ReportConfig) -> dict[str, Any]:
-    rows = _build_rows(config)
-    metric_keys = [_as_metric_key(metric) for metric in config.metrics]
+    fields = DATASET_FIELDS.get(config.dataset)
+    if fields is None:
+        raise HTTPException(status_code=400, detail="Неизвестный источник данных")
+    if config.axisX not in fields:
+        raise HTTPException(status_code=400, detail="Выберите корректное поле для оси X")
+    if config.axisY not in fields:
+        raise HTTPException(status_code=400, detail="Выберите корректное поле для оси Y")
+
+    source_rows = _rows_for_dataset(config.dataset)
+    filtered_rows = _apply_filters(source_rows, config.filters)
+
+    matrix: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    series_set: set[str] = set()
+
+    for row in filtered_rows:
+        x_value = str(row.get(config.axisX) or "Без значения")
+        y_value = str(row.get(config.axisY) or "Без значения")
+        matrix[x_value][y_value] += 1
+        series_set.add(y_value)
+
+    series = sorted(series_set)
+    rows = []
+    for x_value, values in matrix.items():
+        item = {"name": x_value, "total": sum(values.values())}
+        for series_name in series:
+            item[series_name] = values.get(series_name, 0)
+        rows.append(item)
+
+    rows.sort(key=lambda item: int(item.get("total") or 0), reverse=True)
 
     return {
         "config": config.model_dump(),
+        "dataset": config.dataset,
+        "axisX": config.axisX,
+        "axisY": config.axisY,
         "chartType": config.chartType,
-        "groupBy": config.groupBy,
-        "metrics": [{"key": key, "label": METRIC_LABELS.get(key, key)} for key in metric_keys],
-        "rows": rows,
-        "columns": ["name", "matches", *metric_keys],
+        "fields": DATASET_FIELDS,
+        "series": series,
+        "rows": rows[:50],
+        "totalRecords": len(filtered_rows),
         "generatedAt": now_iso(),
     }
 
 
 @router.post("/preview")
-def preview_report(config: ReportConfig, user: dict[str, Any] = Depends(require_moderator_or_admin)) -> dict[str, Any]:
-    if not config.metrics:
-        raise HTTPException(status_code=400, detail="Выберите хотя бы одну метрику")
-
-    base = build_statistics(_=user)
+def preview_report(config: ReportConfig, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    _ensure_dataset_access(config.dataset, user)
     preview = _build_preview(config)
-    preview["summary"] = base["summary"]
+    preview["summary"] = build_statistics(_=user)["summary"]
     return preview
 
 
 @router.post("")
-def save_report(config: ReportConfig, user: dict[str, Any] = Depends(require_moderator_or_admin)) -> dict[str, Any]:
-    if not config.metrics:
-        raise HTTPException(status_code=400, detail="Выберите хотя бы одну метрику")
-
+def save_report(config: ReportConfig, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    _ensure_dataset_access(config.dataset, user)
     db = get_db()
     number = db.reports.count_documents({}) + 1
     preview = _build_preview(config)
@@ -213,6 +261,13 @@ def save_report(config: ReportConfig, user: dict[str, Any] = Depends(require_mod
 
 
 @router.get("")
-def list_reports(_: dict[str, Any] = Depends(require_moderator_or_admin)) -> list[dict[str, Any]]:
+def list_reports(user: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]]:
     db = get_db()
-    return list(db.reports.find({}, {"_id": 0}).sort("created_at", -1))
+    reports = []
+    query: dict[str, Any] = {}
+    if user.get("role") not in {"moderator", "admin"}:
+        query = {"created_by": user.get("email")}
+    for report in db.reports.find(query, {"_id": 0}).sort("created_at", -1):
+        report["createdAtLabel"] = fmt(report.get("created_at"))
+        reports.append(report)
+    return reports

@@ -26,6 +26,7 @@ COLLECTIONS = [
     "reports",
     "import_export_history",
     "app_settings",
+    "log_notes",
 ]
 
 
@@ -123,15 +124,23 @@ async def import_data(
     if not isinstance(collections, dict):
         raise HTTPException(status_code=400, detail="Ожидался дамп приложения с полем collections")
 
-    imported = 0
+    prepared: dict[str, list[dict[str, Any]]] = {}
     for collection_name in COLLECTIONS:
-        rows = collections.get(collection_name)
-        if rows is None:
-            continue
+        rows = collections.get(collection_name, [])
         if not isinstance(rows, list):
             raise HTTPException(status_code=400, detail=f"Коллекция {collection_name} должна быть массивом")
+
+        prepared[collection_name] = [
+            _restore_value(row)
+            for row in rows
+            if isinstance(row, dict)
+        ]
+
+    for collection_name in COLLECTIONS:
         db[collection_name].delete_many({})
-        restored = [_restore_value(row) for row in rows if isinstance(row, dict)]
+
+    imported = 0
+    for collection_name, restored in prepared.items():
         if restored:
             db[collection_name].insert_many(restored)
             imported += len(restored)

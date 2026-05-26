@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.api.dependencies import ROLES, require_admin
+from app.api.pagination import paginate_list
 from app.core.utils import now_iso
 from app.db.connection import get_db
 
@@ -43,6 +44,8 @@ def _ensure_not_last_admin(user_id: str, next_role: str) -> None:
 def list_users(
     q: str | None = None,
     role: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
     _: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     db = get_db()
@@ -61,7 +64,8 @@ def list_users(
         users.append(_user_to_api(user))
 
     role_counts = {item: db.users.count_documents({"role": item}) for item in ROLES}
-    return {"users": users, "roleCounts": role_counts, "roles": list(ROLES)}
+    page_payload = paginate_list(users, page=page, page_size=page_size)
+    return {"users": page_payload["items"], "roleCounts": role_counts, "roles": list(ROLES), "total": page_payload["total"], "page": page_payload["page"], "pageSize": page_payload["pageSize"], "totalPages": page_payload["totalPages"]}
 
 
 @router.patch("/{user_id}/role")
